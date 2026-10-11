@@ -64,7 +64,7 @@ def test_clean_run_runs_every_lane_in_phase_order(tmp_path: Path) -> None:
     runner = FakeRunner()
     code, output = run(project(tmp_path), runner)
     assert code == 0
-    assert runner.modules() == ["ruff", "ruff", "mypy", "pylint", "run", "report"]
+    assert runner.modules() == ["ruff", "ruff", "mypy", "py_qa.pylint_run", "run", "report"]
     assert METHOD_LINE not in output
     assert "PASS" in output
 
@@ -73,7 +73,7 @@ def test_detector_failure_stops_before_runners_but_every_detector_runs(tmp_path:
     runner = FakeRunner(failing=("mypy",))
     code, output = run(project(tmp_path), runner)
     assert code == 1
-    assert runner.modules() == ["ruff", "ruff", "mypy", "pylint"]
+    assert runner.modules() == ["ruff", "ruff", "mypy", "py_qa.pylint_run"]
     assert "runners not run: a format or detector lane failed" in output
     assert METHOD_LINE in output
 

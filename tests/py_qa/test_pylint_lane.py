@@ -57,3 +57,41 @@ def test_clean_scope_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     layout(tmp_path)
     monkeypatch.delenv("FORCE_COLOR", raising=False)
     assert pylint_lane(tmp_path, ("src",)) == 0
+
+
+PROJECT_PLUGIN = '''"""A project checker: flags a call to shout."""
+
+from pylint.checkers import BaseChecker
+
+
+class NoShoutChecker(BaseChecker):
+    name = "proj-no-shout"
+    msgs = {"W9801": ("shout called", "proj-no-shout", "Do not call shout.")}
+
+    def visit_call(self, node):
+        if getattr(node.func, "name", None) == "shout":
+            self.add_message("proj-no-shout", node=node)
+
+
+def register(linter):
+    linter.register_checker(NoShoutChecker(linter))
+'''
+
+
+def test_each_finding_is_reported_once_under_parallel_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    # Pylint re-registers every plugin in each worker over the checkers the parent already
+    # registered, so a plugin's checker ran twice there and printed each finding twice.
+    layout(tmp_path)
+    # A module name no other test imports: py-qa lists the messages from the module in-process.
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.py-qa]\npylint_plugins = ["proj_shout_rules"]\n', encoding="utf-8"
+    )
+    (tmp_path / "proj_shout_rules.py").write_text(PROJECT_PLUGIN, encoding="utf-8")
+    (tmp_path / "src" / "shouts.py").write_text("shout('1')\n", encoding="utf-8")
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    assert pylint_lane(tmp_path, ("src", "tests")) == 1
+    out = capfd.readouterr().out
+    assert out.count("tests/unit/daemon/test_nested.py:3:5: W9702") == 1
+    assert out.count("src/shouts.py:1:0: W9801") == 1
