@@ -213,7 +213,8 @@ def register(linter: PyLinter) -> None:
     linter.register_checker(NoEvalChecker(linter))
 ```
 
-List the module under `pylint_plugins` in `[tool.py-qa]`. Every message it defines is then
+List the module under `pylint_plugins` in `[tool.py-qa]`; it is imported from the environment,
+then from `src/`, then from the project root. Every message it defines is then
 enabled, listed by `py-qa rules`, and must have a page at `<docs_dir>/<symbol>.md` with the
 sections `## What it flags`, `## Why` and `## How to fix correctly`; `py-qa docs-check`
 enforces this. Prove it red with the harness on a fixture before trusting a green run

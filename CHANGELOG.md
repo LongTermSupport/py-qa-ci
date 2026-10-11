@@ -3,6 +3,17 @@
 Every release of py-qa-ci, newest first. Versions follow semantic versioning; whilst the major
 version is 0, a minor release can break a consuming project, and says how.
 
+## 0.4.1
+
+### Fixed
+
+- The Pylint lane printed every finding of a plugin checker, bundled or the project's, twice:
+  under `--jobs` each worker registered every plugin again over the checkers it already held.
+  Registering a checker a linter already holds one of its class is now a no-op.
+- The Pylint lane could not load a project's plugin from the project itself, though `py-qa rules` listed its messages, so the lane failed on its own command line. It runs Pylint through
+  `python -m py_qa.pylint_run`, which imports a plugin from `src/` and the project root as
+  `py-qa rules` does, after the environment, so a project file never shadows a library.
+
 ## 0.4.0
 
 From switching a large project's whole QA process onto py-qa: about forty checks of its own, a

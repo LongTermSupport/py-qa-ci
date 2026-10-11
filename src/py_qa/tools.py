@@ -134,10 +134,16 @@ def pylint_args(config: Config) -> list[str]:
     return args
 
 
+def project_import_paths(root: Path) -> list[str]:
+    """Return where a project's own Pylint plugins are imported from: src, then the root."""
+    return [str(root / "src"), str(root)]
+
+
 @contextlib.contextmanager
 def _project_importable(root: Path) -> Iterator[None]:
-    added = [str(root / "src"), str(root)]
-    sys.path[:0] = added
+    # Appended, as the lane's Pylint does (py_qa.pylint_run), so both resolve a plugin alike.
+    added = project_import_paths(root)
+    sys.path.extend(added)
     try:
         yield
     finally:
@@ -393,7 +399,7 @@ def pylint_commands(
     args = pylint_args(config)
     if symbol is not None:
         args = [f"--enable={symbol}" if arg.startswith("--enable=") else arg for arg in args]
-    return [[sys.executable, "-m", "pylint", *args, "--", *files]]
+    return [[sys.executable, "-m", "py_qa.pylint_run", *args, "--", *files]]
 
 
 def test_commands(config: Config) -> list[list[str]]:
