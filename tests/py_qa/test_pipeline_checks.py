@@ -249,6 +249,67 @@ def test_a_diff_map_naming_a_missing_test_fails_the_lane(tmp_path: Path) -> None
     assert "tests/gone.py is named by [[tool.py-qa.diff.map]] and does not exist" in output
 
 
+def run_paths(root: Path, runner: Recorder, *paths: str) -> tuple[int, str]:
+    out = io.StringIO()
+    code = run_pipeline(
+        load_config(root),
+        requested=(),
+        paths=paths,
+        no_fix=True,
+        fail_fast=False,
+        out=out,
+        runner=runner,
+        today=TODAY,
+    )
+    return code, out.getvalue()
+
+
+def test_paths_narrow_a_check_to_the_named_files_it_checks(tmp_path: Path) -> None:
+    root = project(tmp_path, CHECKS)
+    (root / "docs" / "other.md").write_text("# Other\n", encoding="utf-8")
+    runner = Recorder()
+    code, output = run_paths(root, runner, "docs/guide.md", "src")
+    assert code == 0
+    assert runner.named("spelling.py") == [[PYTHON, "scripts/spelling.py", "docs/guide.md"]]
+    assert runner.named("history.sh") == []
+    assert "py-qa: history: takes no file list" in output
+    whole = Recorder()
+    run_paths(root, whole, "docs")
+    assert whole.named("spelling.py") == [
+        [PYTHON, "scripts/spelling.py", "docs/guide.md", "docs/other.md"]
+    ]
+
+
+def test_paths_skip_a_check_when_no_named_file_is_one_it_checks(tmp_path: Path) -> None:
+    root = project(tmp_path, CHECKS)
+    runner = Recorder()
+    code, output = run_paths(root, runner, "src/pkg/a.py")
+    assert code == 0
+    assert runner.named("spelling.py") == []
+    assert "py-qa: spelling: none of the paths given holds a file it checks" in output
+
+
+def test_paths_command_is_preferred_and_a_ranged_diff_command_is_not_used(
+    tmp_path: Path,
+) -> None:
+    root = project(
+        tmp_path,
+        '[[tool.py-qa.check]]\nname = "todo"\ncommand = ["scripts/todo.sh"]\n'
+        'description = "No TODO marker is left."\ndoc = "scripts/todo.sh"\n'
+        'paths_command = ["scripts/todo.sh", "--files", "{files}"]\n'
+        '[[tool.py-qa.check]]\nname = "ranged"\ncommand = ["scripts/ranged.sh"]\n'
+        'description = "Each commit is signed."\ndoc = "scripts/ranged.sh"\n'
+        'diff_command = ["scripts/ranged.sh", "{range}", "{files}"]\n',
+    )
+    runner = Recorder(failing=("src/pkg/b.py",))
+    code, output = run_paths(root, runner, "src/pkg/b.py")
+    assert code == 1
+    assert runner.named("todo.sh") == [["scripts/todo.sh", "--files", "src/pkg/b.py"]]
+    assert "py-qa: todo failed: todo (py-qa rule-doc todo)" in output
+    assert runner.named("ranged.sh") == []
+    assert "py-qa: ranged: takes no file list" in output
+
+
 def test_paths_and_a_diff_together_are_a_usage_error(tmp_path: Path) -> None:
     with pytest.raises(UsageError, match="-p and --diff"):
         run_pipeline(

@@ -18,6 +18,7 @@ from py_qa.suppression import (
     comment_sites,
     config_sites,
     decorator_sites,
+    named_files,
     project_files,
 )
 
@@ -149,6 +150,7 @@ def test_decorator_scan_reads_only_source_that_names_the_decorator() -> None:
 
 
 def write(root: Path, name: str, text: str) -> None:
+    (root / name).parent.mkdir(parents=True, exist_ok=True)
     (root / name).write_text(text, encoding="utf-8")
 
 
@@ -277,6 +279,18 @@ def test_project_files_in_git_include_untracked_but_not_ignored(tmp_path: Path) 
     write(tmp_path, "kept.py", "")
     write(tmp_path, "stub.pyi", "")
     assert project_files(tmp_path, ()) == ["kept.py", "stub.pyi"]
+
+
+@pytest.mark.parametrize("in_git", [True, False])
+def test_named_files_lists_every_kind_of_file_under_the_paths(tmp_path: Path, in_git: bool) -> None:
+    if in_git:
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        write(tmp_path, ".gitignore", "docs/ignored.md\n.venv/\n")
+        write(tmp_path, "docs/ignored.md", "")
+    for name in ("docs/guide.md", "docs/deep/page.md", "src/a.py", "docs/.venv/x.md"):
+        write(tmp_path, name, "")
+    expected = ["docs/deep/page.md", "docs/guide.md", "src/a.py"]
+    assert named_files(tmp_path, ("docs", "src/a.py", "missing")) == expected
 
 
 def test_mypy_strictness_turned_off_is_a_route(tmp_path: Path) -> None:

@@ -592,6 +592,35 @@ def scope_files(root: Path, scan_exclude: tuple[str, ...], paths: tuple[str, ...
     ]
 
 
+def named_files(root: Path, paths: tuple[str, ...]) -> list[str]:
+    """Return every file of any kind under paths, relative and sorted, as project_files lists.
+
+    That is every file git does not ignore, or without git every file outside environments and
+    build output; a project check reads more than Python.
+    """
+    if in_git_work_tree(root):
+        result = subprocess.run(
+            [
+                *("git", "-C", str(root), "ls-files", "-z"),
+                *("--cached", "--others", "--exclude-standard", "--", *paths),
+            ],
+            capture_output=True,
+            check=True,
+        )
+        listed = {name for name in result.stdout.decode().split("\0") if name}
+    else:
+        listed = set()
+        for path in paths:
+            target = root / path
+            found = [target] if target.is_file() else target.rglob("*") if target.is_dir() else []
+            listed.update(
+                name
+                for name in (item.relative_to(root).as_posix() for item in found)
+                if not SKIPPED_DIRECTORIES.intersection(Path(name).parts)
+            )
+    return sorted(name for name in listed if (root / name).is_file())
+
+
 @functools.cache
 def in_git_work_tree(root: Path) -> bool:
     """Return True when root is inside a git work tree, at its top or in a directory below it."""

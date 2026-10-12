@@ -1,7 +1,7 @@
 """The run: format, then every detector, then the runners, which run only if all before passed.
 
-A full run checks the whole project. `-p` narrows the format and detector lanes to paths and runs
-no runner. A diff run narrows every lane to what changed against a base: the format, Ruff and
+A full run checks the whole project. `-p` narrows the format and detector lanes to paths, each
+project check to the named files it checks, and runs no runner. A diff run narrows every lane to what changed against a base: the format, Ruff and
 Pylint lanes to the changed Python files, each project check to whether a file it watches
 changed, and the test lane to the tests the change can affect; mypy, which needs the whole
 program to judge one file, and py-qa's own lanes, which are quick, still read the whole project.
@@ -32,6 +32,7 @@ from py_qa.suppression import (
     comment_sites,
     config_sites,
     decorator_sites,
+    named_files,
     project_files,
     scope_files,
     within,
@@ -355,11 +356,41 @@ def expand(command: tuple[str, ...], tokens: dict[str, list[str]]) -> list[str]:
     return expanded
 
 
+def check_on_paths(
+    config: Config, check: ProjectCheck, paths: tuple[str, ...]
+) -> tuple[tuple[str, ...], list[str]] | str:
+    """Return the command and files that run a check over the named paths, or why it cannot.
+
+    The files are those under the paths that the check's own paths match; a check with no
+    files_command cannot be narrowed, and is not run whole in place of the files named.
+    """
+    command = check.files_command
+    if command is None:
+        return (
+            "takes no file list (a paths_command, or a diff_command holding {files} and no "
+            "base), so it is not run on the paths given"
+        )
+    files = [
+        name
+        for name in named_files(config.root, paths)
+        if check.paths is None or match_any(check.paths, name)
+    ]
+    if not files:
+        return "none of the paths given holds a file it checks"
+    return command, files
+
+
 def _project_check(state: _Run, check: ProjectCheck) -> tuple[str, str]:
     out = state.out
     tokens = {"{python}": [sys.executable]}
     command = check.command
     change = state.change
+    if state.paths is not None:
+        narrowed = check_on_paths(state.config, check, state.paths)
+        if isinstance(narrowed, str):
+            out.write(f"py-qa: {check.name}: {narrowed}\n")
+            return "skip", narrowed.partition(" (")[0]
+        command, tokens["{files}"] = narrowed
     if change is not None:
         if not check.in_diff:
             out.write(f"py-qa: {check.name}: runs in the full run only\n")
@@ -397,6 +428,12 @@ def _stamp(path: Path) -> tuple[int, int, int] | None:
 
 
 def _checked(state: _Run, lane: str, verdict: Verdict | None, run: Callable[[], bool]) -> bool:
+    return checked(state.config.root, state.out, lane, verdict, run)
+
+
+def checked(
+    root: Path, out: TextIO, lane: str, verdict: Verdict | None, run: Callable[[], bool]
+) -> bool:
     """Run a command and return its verdict: its exit status, and its JSON report if it has one.
 
     The exit status alone is not trusted for a command that reports its verdict in a file: the
@@ -405,24 +442,24 @@ def _checked(state: _Run, lane: str, verdict: Verdict | None, run: Callable[[], 
     if verdict is None:
         return run()
     name, key = verdict
-    path = state.config.root / name
+    path = root / name
     before = _stamp(path)
     if not run():
         return False
     after = _stamp(path)
     if after is None or after == before:
-        state.out.write(f"py-qa: {lane}: this run did not write its verdict file {name}\n")
+        out.write(f"py-qa: {lane}: this run did not write its verdict file {name}\n")
         return False
     try:
         value: object = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        state.out.write(f"py-qa: {lane}: its verdict file {name} is not JSON: {error}\n")
+        out.write(f"py-qa: {lane}: its verdict file {name} is not JSON: {error}\n")
         return False
     for part in key:
         value = value.get(part) if isinstance(value, dict) else None
     if value is not True:
         dotted = ".".join(key)
-        state.out.write(f"py-qa: {lane}: {name} reports {dotted} = {json.dumps(value)}\n")
+        out.write(f"py-qa: {lane}: {name} reports {dotted} = {json.dumps(value)}\n")
         return False
     return True
 

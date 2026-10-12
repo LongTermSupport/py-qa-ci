@@ -56,19 +56,33 @@ _RECORD_KEYS = frozenset({"path", "max_total", "max_per_rule", "max_review_days"
 # A project check runs among the detectors, or after the test lane among the runners.
 CHECK_PHASES = ("detectors", "runners")
 _CHECK_KEYS = frozenset(
-    {"name", "command", "description", "doc", "phase", "paths", "diff_command", "diff", "verdict"}
+    {
+        "name",
+        "command",
+        "description",
+        "doc",
+        "phase",
+        "paths",
+        "diff_command",
+        "paths_command",
+        "diff",
+        "verdict",
+    }
 )
 _CHECK_NAME = re.compile(r"[a-z][a-z0-9_-]*\Z")
 # The placeholders a command may hold as a whole argument, and where each one is allowed.
 _TOKENS = {
     "check command": {"{python}"},
     "check diff_command": {"{python}", "{files}", "{base}", "{merge_base}", "{range}"},
+    "check paths_command": {"{python}", "{files}"},
     "test command": {"{python}"},
     "test diff_command": {"{python}", "{tests}", "{base}", "{merge_base}", "{range}"},
     "diff selector": {"{python}", "{base}", "{merge_base}", "{range}"},
     "test setup": {"{python}"},
     "rule_doc_command": {"{python}", "{identifier}"},
 }
+# The placeholders that name the base of a diff run, which only a diff run has.
+_BASE_TOKENS = frozenset({"{base}", "{merge_base}", "{range}"})
 UNMAPPED_POLICIES = ("full", "ignore")
 # A change to one of these can change any test's outcome, so in a diff run it runs them all.
 DEFAULT_FULL_TESTS_ON = (
@@ -116,6 +130,20 @@ class ProjectCheck:
     diff_command: tuple[str, ...] | None = None
     in_diff: bool = True
     verdict: Verdict | None = None
+    paths_command: tuple[str, ...] | None = None
+
+    @property
+    def files_command(self) -> tuple[str, ...] | None:
+        """Return the command that runs the check over named files, or None if it has none.
+
+        That is paths_command, else a diff_command that takes {files} and needs no base.
+        """
+        if self.paths_command is not None:
+            return self.paths_command
+        command = self.diff_command
+        if command is None or "{files}" not in command or _BASE_TOKENS & set(command):
+            return None
+        return command
 
 
 @dataclass(frozen=True)
@@ -349,6 +377,9 @@ def _checks(table: dict[str, Any]) -> tuple[ProjectCheck, ...]:
                 diff_command=_command(entry, "diff_command", where, "check diff_command"),
                 in_diff=in_diff,
                 verdict=_verdict(entry, where),
+                paths_command=_command(
+                    entry, "paths_command", where, "check paths_command", required="{files}"
+                ),
             )
         )
     return tuple(checks)

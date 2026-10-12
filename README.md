@@ -51,7 +51,8 @@ one invocation reports every static finding; if any of them fails, the runners d
 
 Options: `-t <lane>` (repeatable; overrides the switches), `--skip <lane>` (repeatable; every
 lane but these), `-p <path>` (repeatable; one file is enough; limits the format and detector
-lanes to those paths and does not run the runners), `--diff` and `--base <ref>` (a diff run,
+lanes to those paths, runs each project check on the named files it checks, and does not run the
+runners), `--diff` and `--base <ref>` (a diff run,
 below), `--json <file>` (also write the outcome of every lane, and a diff run's test selection,
 as JSON), `--no-lock`, `--no-fix`, `--ci`, `--fail-fast`. Every identifier a tool prints reaches
 the output unaltered. The run ends with a table of every lane, its result and the seconds it
@@ -68,7 +69,8 @@ Other commands, none of which runs a defence:
   the project record and any scan exclusions
 - `py-qa rule-doc <identifier>`: documentation for any identifier a finding prints, offline
 - `py-qa rule <identifier> <path>...`: the harness, which runs one rule alone on the paths
-  given (Pylint messages, Ruff codes, and the suppression rules), whether or not `scan_exclude`
+  given (Pylint messages, Ruff codes, the suppression rules and project checks, as `-p` runs
+  them), whether or not `scan_exclude`
   covers them; exit 0 it did not fire, 1 it fired, 2 it could not run, as when no Python file is
   under the paths
 - `py-qa docs-check`: fail if a listed defence has no complete page
@@ -92,9 +94,17 @@ doc = "scripts/check_spelling.py"                    # what py-qa rule-doc spell
 phase = "detectors"                                  # or "runners", after the test lane
 paths = ["**/*.md"]                                  # a diff run runs it only when one changed
 diff_command = ["{python}", "scripts/check_spelling.py", "{files}"]  # and like this, if given
+paths_command = ["{python}", "scripts/check_spelling.py", "{files}"] # on named paths; see below
 diff = true                                          # false: the full run only
 verdict = { file = "out/spelling.json", key = "summary.passed" }    # see below
 ```
+
+Under `-p`, and in `py-qa rule <name> <path>...`, a check runs on the files under the paths
+given that its `paths` match, with `{files}` as their list: through `paths_command`, or else a
+`diff_command` that holds `{files}` and no base placeholder. When no named file is one it
+checks, the run says so and skips it; a check with neither command says it takes no file list
+and is not run, rather than running whole over files nobody named (`py-qa rule` exits 2 for
+both).
 
 `name`, `command`, `description` and `doc` are required. `py-qa rule-doc <name>` prints the
 check's description, how it runs, and what documents it: a Markdown file whole, a Python file's

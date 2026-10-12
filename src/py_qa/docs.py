@@ -84,6 +84,11 @@ def _check_doc(check: ProjectCheck, config: Config) -> str:
         lines.append(f"In a diff run: {' '.join(check.diff_command)}")
     if not check.in_diff:
         lines.append("In a diff run: not run; the full run checks it")
+    narrowed = check.files_command
+    if narrowed is not None:
+        lines.append(f"On named paths (-p, py-qa rule): {' '.join(narrowed)}")
+    else:
+        lines.append("On named paths (-p, py-qa rule): not run; it takes no file list")
     lines.append(f"Documented in: {check.doc}")
     body = doc_text(config.root / check.doc)
     if body:
