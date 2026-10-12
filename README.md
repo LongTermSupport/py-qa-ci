@@ -20,7 +20,7 @@ Pin an exact tag, as a development dependency of the project, so the tools run i
 own environment and see its dependencies:
 
 ```bash
-uv add --dev "py-qa-ci @ git+https://github.com/LongTermSupport/py-qa-ci@v0.4.0"
+uv add --dev "py-qa-ci @ git+https://github.com/LongTermSupport/py-qa-ci@v0.5.0"
 uv run py-qa run
 ```
 
