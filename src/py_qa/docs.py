@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from py_qa.finding import Finding
-from py_qa.tools import BUNDLED_PLUGIN
+from py_qa.tools import BUNDLED_PLUGIN, project_importable
 
 if TYPE_CHECKING:
     from py_qa.config import Config, ProjectCheck
@@ -129,7 +129,8 @@ def _pylint_definitions(name: str, config: Config) -> list[tuple[str, str, str]]
 
     linter = PyLinter()
     linter.load_default_plugins()
-    linter.load_plugin_modules([BUNDLED_PLUGIN, *config.pylint_plugins])
+    with project_importable(config.root):
+        linter.load_plugin_modules([BUNDLED_PLUGIN, *config.pylint_plugins])
     try:
         definitions = linter.msgs_store.get_message_definitions(name)
     except UnknownMessageError:

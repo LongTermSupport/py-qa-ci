@@ -38,6 +38,37 @@ def test_project_page_wins_for_the_projects_own_identifier(root: Path) -> None:
     assert resolve("proj-no-eval", load_config(root)) == "# proj-no-eval\n"
 
 
+PLUGIN = '''"""A project's own Pylint rule, for rule-doc to resolve by its message id."""
+from pylint.checkers import BaseChecker
+
+
+class NoLegacySendChecker(BaseChecker):
+    name = "proj-no-legacy-send"
+    msgs = {"W9901": ("legacy send", "proj-no-legacy-send", "Send through the outbox.")}
+
+
+def register(linter):
+    linter.register_checker(NoLegacySendChecker(linter))
+'''
+
+
+@pytest.mark.parametrize("folder", [".", "src"])
+def test_a_project_plugin_message_id_resolves_from_the_root_or_src(root: Path, folder: str) -> None:
+    # A module name of its own for each case: one imported earlier would resolve from anywhere.
+    module = "proj_doc_rules_" + ("root" if folder == "." else folder)
+    (root / "pyproject.toml").write_text(
+        f'[tool.py-qa]\npylint_plugins = ["{module}"]\n', encoding="utf-8"
+    )
+    (root / folder).mkdir(exist_ok=True)
+    (root / folder / f"{module}.py").write_text(PLUGIN, encoding="utf-8")
+    pages = root / "docs" / "defences"
+    pages.mkdir(parents=True)
+    (pages / "proj-no-legacy-send.md").write_text("# proj-no-legacy-send\n", encoding="utf-8")
+    config = load_config(root)
+    assert resolve("W9901", config) == "# proj-no-legacy-send\n"
+    assert resolve("pylint::W9901", config) == "# proj-no-legacy-send\n"
+
+
 def test_native_catalogues(root: Path) -> None:
     config = load_config(root)
     ruff = resolve("F401", config)

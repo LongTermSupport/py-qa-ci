@@ -140,8 +140,12 @@ def project_import_paths(root: Path) -> list[str]:
 
 
 @contextlib.contextmanager
-def _project_importable(root: Path) -> Iterator[None]:
-    # Appended, as the lane's Pylint does (py_qa.pylint_run), so both resolve a plugin alike.
+def project_importable(root: Path) -> Iterator[None]:
+    """Make the project's own Pylint plugins importable for the duration of the block.
+
+    The paths are appended, as the lane's Pylint does (py_qa.pylint_run), so every reader of a
+    plugin resolves it alike.
+    """
     added = project_import_paths(root)
     sys.path.extend(added)
     try:
@@ -158,7 +162,7 @@ def pylint_messages(config: Config) -> list[PylintMessage]:
     plugins = (BUNDLED_PLUGIN, *config.pylint_plugins)
     linter = PyLinter()
     linter.load_default_plugins()
-    with _project_importable(config.root):
+    with project_importable(config.root):
         for module in plugins:
             _import_plugin(module)
         linter.load_plugin_modules(list(plugins))
