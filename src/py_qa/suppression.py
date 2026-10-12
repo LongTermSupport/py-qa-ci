@@ -16,13 +16,16 @@ import subprocess
 import tokenize
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import tomllib
 
 from py_qa.config import ConfigError, read_pyproject
 from py_qa.finding import Finding
 from py_qa.record import STALE, RecordEntry
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 UNRECORDED = "pyqaci.suppression.unrecorded"
 BLANKET = "pyqaci.suppression.blanket"
@@ -71,9 +74,11 @@ _NOQA = re.compile(
 )
 _RUFF_BRACKET = re.compile(r"#\s*ruff\s*:\s*(?:ignore|file-ignore|disable)\[([^\]]*)\]")
 _ISORT = re.compile(r"#\s*isort\s*:\s*(?:skip_file|skip|off)\b")
-_PYLINT = re.compile(
-    r"#\s*pylint\s*:\s*(disable-next|disable-line|disable|skip-file)(?![\w-])(?:\s*=\s*(.*))?"
-)
+# Pylint reads a pragma anywhere in a comment, after a reason as well as at its start; the
+# actions below are the ones that silence a message.
+_PYLINT_WORD = re.compile(r"\bpylint:")
+_PYLINT_DISABLING = frozenset({"disable", "disable-next", "disable-msg"})
+_PYLINT_BLANKET = frozenset({"disable-all", "skip-file"})
 _TYPE_IGNORE = re.compile(r"#\s*type\s*:\s*ignore(?:\[([^\]]*)\])?(?![\w-])")
 _MYPY = re.compile(r"#\s*mypy\s*:\s*(.*)")
 _PYRIGHT_IGNORE = re.compile(r"#\s*pyright\s*:\s*ignore(?:\[([^\]]*)\])?")
@@ -83,10 +88,11 @@ _NOSEC = re.compile(r"#\s*nosec\b(?:\s*:?\s*([A-Z][0-9]+(?:[\s,]+[A-Z][0-9]+)*))
 _COVERAGE = re.compile(r"#\s*pragma[:\s]?\s*no\s*(cover|branch)\b", re.IGNORECASE)
 _NOSEMGREP = re.compile(r"#\s*nosemgrep\b(?:\s*:\s*([\w.\-]+(?:\s*,\s*[\w.\-]+)*))?")
 
-# Every directive above starts with one of these words after its '#'; matched without regard to
-# case, it is a superset of them all.
+# Every directive above starts with one of these words after its '#', and a Pylint pragma holds
+# its word and colon at any point in a comment; matched without regard to case, it is a superset
+# of them all.
 _CANDIDATE = re.compile(
-    r"#\s*(?:ruff|flake8|noqa|isort|pylint|type|mypy|pyright|nosec|nosemgrep|pragma)",
+    r"#\s*(?:ruff|flake8|noqa|isort|type|mypy|pyright|nosec|nosemgrep|pragma)|\bpylint:",
     re.IGNORECASE,
 )
 
@@ -110,9 +116,6 @@ def _directives(segment: str) -> list[tuple[str, tuple[str, ...]]]:
         return [("ruff", _split(match.group(1), r"\s*,\s*"))]
     if _ISORT.match(segment):
         return [("ruff", ("I001",))]
-    if match := _PYLINT.match(segment):
-        codes = _split(match.group(2), r"\s*,\s*") if match.group(1) != "skip-file" else ()
-        return [("pylint", () if "all" in codes else codes)]
     if match := _TYPE_IGNORE.match(segment):
         return [("mypy", _split(match.group(1), r"\s*,\s*"))]
     if match := _MYPY.match(segment):
@@ -128,6 +131,46 @@ def _directives(segment: str) -> list[tuple[str, tuple[str, ...]]]:
     if match := _COVERAGE.match(segment):
         return [("coverage", (f"no-{match.group(1).lower()}",))]
     return []
+
+
+@functools.cache
+def _pylint_pragma() -> tuple[re.Pattern[str], Any, type[Exception]]:
+    # deferred: Pylint is slow to import, and most comments hold no Pylint pragma
+    from pylint.utils.pragma_parser import OPTION_PO, PragmaParserError, parse_pragma
+
+    return OPTION_PO, parse_pragma, PragmaParserError
+
+
+def _pylint_directive(comment: str) -> tuple[str, tuple[str, ...], str] | None:
+    """Return the pragma Pylint reads in a comment, as (tool, codes, text), if it silences.
+
+    Pylint's own expression and parser decide, so a pragma counts exactly where Pylint obeys it.
+    """
+    if not _PYLINT_WORD.search(comment):
+        return None
+    expression, parse, parse_error = _pylint_pragma()
+    match = expression.search(comment)
+    if match is None:
+        return None
+    codes: list[str] = []
+    blanket = False
+    for pragma in _pragmas_read(iter(parse(match.group(2))), parse_error):
+        if pragma.action in _PYLINT_BLANKET:
+            blanket = True
+        elif pragma.action in _PYLINT_DISABLING:
+            blanket = blanket or "all" in pragma.messages
+            codes.extend(pragma.messages)
+    if not blanket and not codes:
+        return None
+    return "pylint", () if blanket else tuple(codes), match.group(1).strip()
+
+
+def _pragmas_read(pragmas: Iterator[Any], parse_error: type[Exception]) -> Iterator[Any]:
+    """Yield the pragmas Pylint applies: it stops at one it cannot parse, keeping those before."""
+    try:
+        yield from pragmas
+    except parse_error:
+        return
 
 
 def _mypy_inline(settings: str) -> list[tuple[str, tuple[str, ...]]]:
@@ -177,6 +220,8 @@ def comment_sites(display: str, source: str) -> list[Site]:
                 Site(display, token.start[0], tool, codes, segment.strip())
                 for tool, codes in _directives(segment)
             )
+        if pylint := _pylint_directive(token.string):
+            found.append(Site(display, token.start[0], *pylint))
     return found
 
 
