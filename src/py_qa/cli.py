@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -20,9 +20,19 @@ from py_qa.defences import BUILTIN, active_defences
 from py_qa.diff import DiffError, changed_files, resolve_base
 from py_qa.docs import check_docs, resolve
 from py_qa.lock import LockHeldError, lock_path, run_lock
-from py_qa.pipeline import METHOD_LINE, UsageError, all_lanes, run_pipeline, suppression_findings
+from py_qa.pipeline import (
+    METHOD_LINE,
+    UsageError,
+    all_lanes,
+    check_on_paths,
+    checked,
+    expand,
+    run_pipeline,
+    suppression_findings,
+)
 from py_qa.record import RecordEntry, check_record, load_record
 from py_qa.summary import check_summary, write_summary
+from py_qa.suppression import scope_files
 from py_qa.tools import lane_tool, pylint_commands, pylint_messages, ruff_check_command
 
 if TYPE_CHECKING:
@@ -262,8 +272,33 @@ def _rule_doc(config: Config, identifier: str) -> int:
 
 
 def _rule(config: Config, identifier: str, paths: tuple[str, ...]) -> int:
-    """Run one rule alone on paths: exit 0 it did not fire, 1 it fired, 2 it could not run."""
+    """Run one rule alone on paths: exit 0 it did not fire, 1 it fired, 2 it could not run.
+
+    scan_exclude governs the sweep, not a request: the paths named are read whether or not it
+    covers them, since that is where a rule's fixtures live. A path that holds no Python file is
+    refused, so a red proof cannot pass for green by reaching nothing.
+    """
+    config = replace(config, scan_exclude=())
+    check = next((check for check in config.checks if check.name == identifier), None)
+    if check is not None:
+        narrowed = check_on_paths(config, check, paths)
+        if isinstance(narrowed, str):
+            msg = f"{identifier}: {narrowed}"
+            raise UsageError(msg)
+        check_command, files = narrowed
+        argv = expand(check_command, {"{python}": [sys.executable], "{files}": files})
+        passed = checked(
+            config.root,
+            sys.stdout,
+            identifier,
+            check.verdict,
+            lambda: subprocess.run(argv, cwd=config.root, check=False).returncode == 0,
+        )
+        return 0 if passed else 1
     if identifier in _HARNESS_BUILTINS:
+        if not scope_files(config.root, (), paths):
+            msg = f"no Python file under {', '.join(paths)}"
+            raise UsageError(msg)
         entries, _ = _entries(config)
         findings = suppression_findings(config, entries, paths)
         return _report([finding for finding in findings if finding.rule == identifier])
@@ -287,7 +322,7 @@ def _rule(config: Config, identifier: str, paths: tuple[str, ...]) -> int:
         return subprocess.run(command, cwd=config.root, check=False).returncode
     msg = (
         f"{identifier}: py-qa cannot run one rule alone for this identifier; the harness "
-        "covers Pylint messages, Ruff codes and py-qa's suppression rules"
+        "covers Pylint messages, Ruff codes, py-qa's suppression rules and project checks"
     )
     raise UsageError(msg)
 

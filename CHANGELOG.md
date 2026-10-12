@@ -3,6 +3,48 @@
 Every release of py-qa-ci, newest first. Versions follow semantic versioning; whilst the major
 version is 0, a minor release can break a consuming project, and says how.
 
+## 0.5.0
+
+### May fail a project that passed on 0.4.1
+
+Each of these silenced a finding without a record exception, and is now a suppression the
+record has to hold:
+
+- **A Pylint pragma after other text in a comment** (`# the outbox is down, so pylint: disable=proj-no-legacy-send`). Pylint obeys a pragma anywhere in a comment, but the lane found
+  one only at the start. The lane now reads each comment with Pylint's own pragma expression and
+  parser, so a pragma counts exactly where Pylint obeys it.
+- **`@typing.no_type_check`** (or `typing_extensions`, or under any name it is imported as):
+  mypy does not check the function it decorates. It is found in the parsed module and recorded as
+  `mypy::no_type_check`, which `py-qa rule-doc` resolves.
+- **Ruff configuration below the root, or reached by `extend`.** Ruff applies the closest
+  configuration to each file and follows `extend`; with a Ruff configuration of the project's
+  own, every Ruff configuration file in the project (minus `scan_exclude`) and every file an
+  `extend` reaches is now read, each at its own path. Under the bundled configuration, which
+  py-qa passes with `--config` and so turns Ruff's discovery off, none is read.
+
+### Added
+
+- **Project checks on named paths.** Under `-p`, a `[[tool.py-qa.check]]` runs on the files
+  under the paths given that its `paths` match, through the new `paths_command` (with `{files}`)
+  or a `diff_command` that takes `{files}` and needs no base; one with no named file to check is
+  skipped with a message, and one that cannot take a file list says so rather than running whole
+  over files nobody named. `py-qa rule <check> <path>...` runs a check the same way.
+- `py-qa rule-doc invalid-syntax`: a bundled page for the code Ruff prints for a file it cannot
+  accept, which is not in Ruff's catalogue.
+
+### Fixed
+
+- `py-qa rule` selected files through `scan_exclude`, so a fixture kept out of the sweep, as the
+  README advises, could not be reached: the Pylint route refused, and the suppression route
+  printed nothing and exited 0, a red proof reading as green. The harness now reads the paths
+  named whatever `scan_exclude` says, and exits 2 for every route when no Python file is under
+  them.
+- `py-qa rule-doc <message id>` did not resolve a project Pylint plugin's message id when the
+  plugin was imported from `src/` or the project root; it now loads plugins as `py-qa rules` does.
+- The README's install line pinned the previous release; a test now holds it, and the
+  changelog's latest heading, to the version in `pyproject.toml`.
+- A test now fails if py-qa-ci's own run stops running a bundled defence on its own source.
+
 ## 0.4.1
 
 ### Fixed

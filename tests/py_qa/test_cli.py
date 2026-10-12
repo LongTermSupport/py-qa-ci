@@ -122,6 +122,34 @@ def test_rule_harness_ruff_and_builtin(root: Path, capsys: pytest.CaptureFixture
     assert main(["rule", "pyqaci.suppression.unscanned", "src/a.py"]) == 0
 
 
+def test_rule_harness_reaches_a_fixture_under_scan_exclude(
+    root: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    (root / "pyproject.toml").write_text(
+        '[tool.py-qa]\nscan_exclude = ["tests/fixtures/*"]\n', encoding="utf-8"
+    )
+    fixtures = root / "tests" / "fixtures"
+    fixtures.mkdir(parents=True)
+    (fixtures / "leaky.py").write_text(LEAKY, encoding="utf-8")
+    (fixtures / "ign.py").write_text(
+        "def d() -> int:\n    return 'x'  # type: " + "ignore[return-value]\n", encoding="utf-8"
+    )
+    assert main(["rule", "pyqaci-sensitive-repr", "tests/fixtures/leaky.py"]) == 1
+    assert "pyqaci-sensitive-repr" in capfd.readouterr().out
+    assert main(["rule", "pyqaci.suppression.unrecorded", "tests/fixtures/ign.py"]) == 1
+    assert "tests/fixtures/ign.py:2: pyqaci.suppression.unrecorded" in capfd.readouterr().out
+    # The sweep still leaves the fixtures out.
+    assert main(["run", "-t", "suppression"]) == 0
+
+
+def test_rule_harness_refuses_a_path_with_no_python_file(
+    root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["rule", "pyqaci.suppression.unrecorded", "src/missing.py"]) == 2
+    assert "no Python file under src/missing.py" in capsys.readouterr().err
+    assert main(["rule", "pyqaci-sensitive-repr", "src/missing.py"]) == 2
+
+
 def test_rule_harness_refuses_what_it_cannot_run_alone(
     root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -237,6 +265,47 @@ def test_a_held_lock_exits_3(root: Path, capsys: pytest.CaptureFixture[str]) -> 
         assert main(["run", "-t", "record"]) == 3
         assert "another py-qa run holds" in capsys.readouterr().err
         assert main(["run", "-t", "record", "--no-lock"]) == 0
+
+
+TODO_SCRIPT = """import sys
+from pathlib import Path
+
+files = sys.argv[1:] or [str(path) for path in Path("src").rglob("*.py")]
+marked = [name for name in files if "TO" + "DO" in Path(name).read_text(encoding="utf-8")]
+print("\\n".join(marked))
+sys.exit(1 if marked else 0)
+"""
+
+
+def test_paths_and_the_harness_run_a_project_check_on_the_named_files(
+    root: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    with (root / "pyproject.toml").open("a", encoding="utf-8") as handle:
+        handle.write(
+            "[tool.py-qa.tools]\nfmt = false\nruff = false\nmypy = false\npylint = false\n"
+            "summary = false\ndocs = false\n"
+            '[[tool.py-qa.check]]\nname = "proj-no-todo"\n'
+            'command = ["{python}", "scripts/todo.py"]\n'
+            'description = "No marker is left in the source."\ndoc = "scripts/todo.py"\n'
+            'paths = ["src/**/*.py"]\npaths_command = ["{python}", "scripts/todo.py", "{files}"]\n'
+            '[[tool.py-qa.check]]\nname = "whole"\ncommand = ["{python}", "scripts/todo.py"]\n'
+            'description = "Nothing is marked anywhere."\ndoc = "scripts/todo.py"\n'
+        )
+    (root / "scripts").mkdir()
+    (root / "scripts" / "todo.py").write_text(TODO_SCRIPT, encoding="utf-8")
+    (root / "src" / "core.py").write_text("x = 1\n", encoding="utf-8")
+    (root / "src" / "other.py").write_text("# TO" + "DO: finish\n", encoding="utf-8")
+    assert main(["run", "--no-fix", "-p", "src/core.py"]) == 0
+    output = capfd.readouterr().out
+    assert "src/other.py" not in output
+    assert "py-qa: whole: takes no file list" in output
+    assert main(["rule", "proj-no-todo", "src/core.py"]) == 0
+    assert main(["rule", "proj-no-todo", "src/other.py"]) == 1
+    assert "src/other.py" in capfd.readouterr().out
+    assert main(["rule", "proj-no-todo", "README.md"]) == 2
+    assert "none of the paths given holds a file it checks" in capfd.readouterr().err
+    assert main(["rule", "whole", "src/core.py"]) == 2
+    assert "takes no file list" in capfd.readouterr().err
 
 
 def test_tools_and_rule_doc_cover_project_checks(

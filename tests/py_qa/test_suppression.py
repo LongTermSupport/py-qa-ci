@@ -17,6 +17,8 @@ from py_qa.suppression import (
     check_suppressions,
     comment_sites,
     config_sites,
+    decorator_sites,
+    named_files,
     project_files,
 )
 
@@ -51,6 +53,25 @@ def sites(text: str) -> list[tuple[int, str, tuple[str, ...]]]:
         ("#@pylint:disable-next=too-many-locals\n", [(1, "pylint", ("too-many-locals",))]),
         ("#@pylint: disable=all\n", [(1, "pylint", ())]),
         ("#@pylint: skip-file\n", [(1, "pylint", ())]),
+        (
+            "x = 1  #@outbox is down here, so pylint: disable=proj-no-legacy-send\n",
+            [(1, "pylint", ("proj-no-legacy-send",))],
+        ),
+        (
+            "x = 1  #@pylint: disable=invalid-name; the name is the protocol's\n",
+            [(1, "pylint", ("invalid-name",))],
+        ),
+        ("x = 1  #@see why, pylint: disable=all\n", [(1, "pylint", ())]),
+        (
+            "x = 1  #@type: ignore[misc]  #@pylint: disable=W0612\n",
+            [(1, "mypy", ("misc",)), (1, "pylint", ("W0612",))],
+        ),
+        ("#@pylint: disable=W0612, enable=invalid-name\n", [(1, "pylint", ("W0612",))]),
+        ("#@pylint: enable=invalid-name\n", []),
+        ("#@pylint: disable=W0612, frobnicate=x\n", []),
+        ("#@pylint: disable-next=C0103, enable=W0612=x\n", [(1, "pylint", ("C0103",))]),
+        ("#@pylint : disable=invalid-name\n", []),
+        ("x = 1  #@mentions pylint in prose\n", []),
         ("x = 1  #@type: ignore\n", [(1, "mypy", ())]),
         ("x = 1  #@type: ignore[arg-type, misc]\n", [(1, "mypy", ("arg-type", "misc"))]),
         ("#@mypy: ignore-errors\n", [(1, "mypy", ())]),
@@ -97,7 +118,39 @@ def test_source_with_no_directive_word_is_not_tokenized() -> None:
     assert comment_sites("a.py", 'x = """\n') == []
 
 
+NO_TYPE_CHECK = "no_type_check"
+
+
+@pytest.mark.parametrize(
+    ("text", "lines"),
+    [
+        ("import typing\n\n\n@typing.NTC\ndef d(text: str) -> int:\n    return text\n", [4]),
+        ("from typing import NTC\n\n\n@NTC\ndef d(): ...\n", [4]),
+        ("from typing_extensions import NTC\n\n\nclass C:\n    @NTC\n    def d(self): ...\n", [5]),
+        ("import typing_extensions as te\n\n\n@te.NTC\nasync def d(): ...\n", [4]),
+        ("from typing import NTC as unchecked\n\n\n@staticmethod\n@unchecked\ndef d(): ...\n", [5]),
+        ("import typing as t\n\n\n@t.NTC\ndef d(): ...\n", [4]),
+        # Not typing's decorator, so mypy checks the function.
+        ("from mylib import NTC\n\n\n@NTC\ndef d(): ...\n", []),
+        ("import mylib\n\n\n@mylib.NTC\ndef d(): ...\n", []),
+        ('x = "@typing.NTC"\n', []),
+    ],
+)
+def test_no_type_check_decorator_is_a_route(text: str, lines: list[int]) -> None:
+    found = decorator_sites("a.py", text.replace("NTC", NO_TYPE_CHECK))
+    assert [(site.line, site.rule_ids) for site in found] == [
+        (line, (f"mypy::{NO_TYPE_CHECK}",)) for line in lines
+    ]
+
+
+def test_decorator_scan_reads_only_source_that_names_the_decorator() -> None:
+    assert decorator_sites("a.py", "def broken(:\n") == []
+    with pytest.raises(SyntaxError):
+        decorator_sites("a.py", f"import typing\n@typing.{NO_TYPE_CHECK}\ndef broken(:\n")
+
+
 def write(root: Path, name: str, text: str) -> None:
+    (root / name).parent.mkdir(parents=True, exist_ok=True)
     (root / name).write_text(text, encoding="utf-8")
 
 
@@ -166,6 +219,56 @@ def test_ruff_toml_and_mypy_ini_routes(tmp_path: Path) -> None:
     }
 
 
+def test_a_nested_ruff_configuration_is_read(tmp_path: Path) -> None:
+    write(tmp_path, "pyproject.toml", '[tool.ruff.lint]\nselect = ["T20"]\n')
+    write(tmp_path, "src/probe/sub/ruff.toml", '[lint]\nselect = ["T20"]\nignore = ["T201"]\n')
+    write(tmp_path, "src/probe/other/pyproject.toml", '[tool.ruff]\nextend-exclude = ["gen"]\n')
+    write(tmp_path, "src/probe/plain/pyproject.toml", '[project]\nname = "plain"\n')
+    write(tmp_path, ".venv/lib/ruff.toml", '[lint]\nignore = ["E501"]\n')
+    write(tmp_path, "tests/fixtures/ruff.toml", '[lint]\nignore = ["E501"]\n')
+    found = {
+        (site.path, site.line, site.codes)
+        for site in config_sites(tmp_path, scan_exclude=("tests/fixtures/*",))
+    }
+    assert found == {
+        ("src/probe/sub/ruff.toml", 3, ("T201",)),
+        ("src/probe/other/pyproject.toml", 2, ("exclude",)),
+    }
+
+
+def test_a_nested_ruff_configuration_is_inert_under_the_bundled_one(tmp_path: Path) -> None:
+    # py-qa passes the bundled configuration with --config, which turns off Ruff's discovery.
+    write(tmp_path, "pyproject.toml", '[project]\nname = "probe"\n')
+    write(tmp_path, "src/probe/sub/ruff.toml", '[lint]\nignore = ["T201"]\n')
+    assert config_sites(tmp_path) == []
+
+
+def test_a_ruff_configuration_reached_by_extend_is_read(tmp_path: Path) -> None:
+    write(tmp_path, "pyproject.toml", '[tool.ruff]\nextend = "qa/ruff-base.toml"\n')
+    write(
+        tmp_path,
+        "qa/ruff-base.toml",
+        'extend = "../shared/.ruff.toml"\n[lint]\nignore = ["T201"]\n',
+    )
+    write(
+        tmp_path,
+        "shared/.ruff.toml",
+        'extend = "../qa/ruff-base.toml"\n[lint]\nignore = ["E501"]\n',
+    )
+    found = sorted((site.path, site.codes) for site in config_sites(tmp_path))
+    # shared/.ruff.toml is found once, though it is both in the scope and reached by extend.
+    assert found == [("qa/ruff-base.toml", ("T201",)), ("shared/.ruff.toml", ("E501",))]
+
+
+def test_an_extend_outside_the_project_is_read_and_named_from_the_project(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write(project, "ruff.toml", 'extend = "../base.toml"\n')
+    write(tmp_path, "base.toml", '[lint]\nignore = ["T201"]\n')
+    assert [(site.path, site.codes) for site in config_sites(project)] == [
+        ("../base.toml", ("T201",))
+    ]
+
+
 def test_settings_that_do_not_silence_are_not_routes(tmp_path: Path) -> None:
     write(
         tmp_path,
@@ -226,6 +329,18 @@ def test_project_files_in_git_include_untracked_but_not_ignored(tmp_path: Path) 
     write(tmp_path, "kept.py", "")
     write(tmp_path, "stub.pyi", "")
     assert project_files(tmp_path, ()) == ["kept.py", "stub.pyi"]
+
+
+@pytest.mark.parametrize("in_git", [True, False])
+def test_named_files_lists_every_kind_of_file_under_the_paths(tmp_path: Path, in_git: bool) -> None:
+    if in_git:
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        write(tmp_path, ".gitignore", "docs/ignored.md\n.venv/\n")
+        write(tmp_path, "docs/ignored.md", "")
+    for name in ("docs/guide.md", "docs/deep/page.md", "src/a.py", "docs/.venv/x.md"):
+        write(tmp_path, name, "")
+    expected = ["docs/deep/page.md", "docs/guide.md", "src/a.py"]
+    assert named_files(tmp_path, ("docs", "src/a.py", "missing")) == expected
 
 
 def test_mypy_strictness_turned_off_is_a_route(tmp_path: Path) -> None:

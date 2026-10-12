@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from py_qa.finding import Finding
-from py_qa.tools import BUNDLED_PLUGIN
+from py_qa.tools import BUNDLED_PLUGIN, project_importable
 
 if TYPE_CHECKING:
     from py_qa.config import Config, ProjectCheck
@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
 BUNDLED_DOCS = Path(__file__).parent / "docs" / "rules"
 DANGLING = "pyqaci.docs.dangling"
+# Codes a tool prints that are not in its rule catalogue, each with a page bundled beside py-qa's.
+TOOL_DIAGNOSTICS = ("invalid-syntax",)
 REQUIRED_SECTIONS = ("## What it flags", "## Why", "## How to fix correctly")
 _PREFIX = re.compile(r"^(?:ruff|pylint|mypy|pyright|bandit|semgrep|coverage)::")
 
@@ -82,6 +84,11 @@ def _check_doc(check: ProjectCheck, config: Config) -> str:
         lines.append(f"In a diff run: {' '.join(check.diff_command)}")
     if not check.in_diff:
         lines.append("In a diff run: not run; the full run checks it")
+    narrowed = check.files_command
+    if narrowed is not None:
+        lines.append(f"On named paths (-p, py-qa rule): {' '.join(narrowed)}")
+    else:
+        lines.append("On named paths (-p, py-qa rule): not run; it takes no file list")
     lines.append(f"Documented in: {check.doc}")
     body = doc_text(config.root / check.doc)
     if body:
@@ -129,7 +136,8 @@ def _pylint_definitions(name: str, config: Config) -> list[tuple[str, str, str]]
 
     linter = PyLinter()
     linter.load_default_plugins()
-    linter.load_plugin_modules([BUNDLED_PLUGIN, *config.pylint_plugins])
+    with project_importable(config.root):
+        linter.load_plugin_modules([BUNDLED_PLUGIN, *config.pylint_plugins])
     try:
         definitions = linter.msgs_store.get_message_definitions(name)
     except UnknownMessageError:
@@ -232,6 +240,9 @@ _ROUTES = {
     "modules mypy does not analyse, or analyses without reporting their errors.",
     "mypy::ignore_errors": "A mypy `ignore_errors = true` setting: every error in the modules "
     "it names is dropped.",
+    "mypy::no_type_check": "The `@typing.no_type_check` decorator (or `@no_type_check`, from "
+    "`typing` or `typing_extensions`, under any name it is imported as): mypy does not check "
+    "the function it decorates, so every error in it is dropped.",
     "coverage::no-cover": "A coverage.py `pragma: no cover` comment: the line, or the block it "
     "opens, is left out of measurement.",
     "coverage::no-branch": "A coverage.py `pragma: no branch` comment: a branch not taken there "

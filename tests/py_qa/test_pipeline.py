@@ -95,6 +95,17 @@ def test_builtin_findings_fail_the_suppression_lane(tmp_path: Path) -> None:
     assert runner.calls == []
 
 
+def test_a_no_type_check_decorator_fails_the_suppression_lane(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    (root / "src" / "unchecked.py").write_text(
+        "import typing\n\n\n@typing.no_type_check\ndef d(text: str) -> int:\n    return text\n",
+        encoding="utf-8",
+    )
+    code, output = run(root, FakeRunner(), requested=("suppression",))
+    assert code == 1
+    assert "src/unchecked.py:4: pyqaci.suppression.unrecorded mypy::no_type_check" in output
+
+
 def test_unreadable_file_is_reported_not_skipped(tmp_path: Path) -> None:
     root = project(tmp_path)
     (root / "src" / "broken.py").write_text('x = """  # type: ' + "ignore\n", encoding="utf-8")

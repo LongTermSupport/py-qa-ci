@@ -10,19 +10,22 @@ git does not ignore, or every `.py` and `.pyi` file outside environments and bui
 there is no git repository), minus `scan_exclude`, with `tokenize`, so text inside strings and
 docstrings is never mistaken for a directive. It recognises:
 
-| Tool    | Comment forms                                                                                                                                                                                     |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Ruff    | `noqa: <codes>`, `ruff: noqa: <codes>`, `flake8: noqa: <codes>`, `ruff: ignore[...]`, `ruff: file-ignore[...]`, `ruff: disable[...]`, `isort: skip`, `isort: skip_file`, `isort: off` (as `I001`) |
-| Pylint  | `pylint: disable=`, `disable-next=`, `disable-line=`                                                                                                                                              |
-| mypy    | `type: ignore[<codes>]`, `mypy: disable-error-code=...`, and any file-level `mypy:` setting that allows, ignores or turns a check off (`allow-untyped-defs`)                                      |
-| Pyright | `pyright: ignore[<rules>]`, `pyright: basic`, `pyright: report<Rule>=false` (or `none`, `information`, `warning`)                                                                                 |
-| Bandit  | `nosec <codes>`                                                                                                                                                                                   |
-| Semgrep | `nosemgrep: <rule ids>`                                                                                                                                                                           |
-| coverage.py | `pragma: no cover` (as `no-cover`) and `pragma: no branch` (as `no-branch`), in any case and spacing coverage.py accepts |
+| Tool        | Comment forms                                                                                                                                                                                                                                                                                                                |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ruff        | `noqa: <codes>`, `ruff: noqa: <codes>`, `flake8: noqa: <codes>`, `ruff: ignore[...]`, `ruff: file-ignore[...]`, `ruff: disable[...]`, `isort: skip`, `isort: skip_file`, `isort: off` (as `I001`)                                                                                                                            |
+| Pylint      | `pylint: disable=`, `disable-next=`, `disable-msg=`, `skip-file`, anywhere in a comment, after a reason too, as Pylint's own pragma parser reads it                                                                                                                                                                          |
+| mypy        | `type: ignore[<codes>]`, `mypy: disable-error-code=...`, and any file-level `mypy:` setting that allows, ignores or turns a check off (`allow-untyped-defs`); and, read from the parsed module rather than a comment, a function decorated with `typing.no_type_check` under any name it is imported as (as `no_type_check`) |
+| Pyright     | `pyright: ignore[<rules>]`, `pyright: basic`, `pyright: report<Rule>=false` (or `none`, `information`, `warning`)                                                                                                                                                                                                            |
+| Bandit      | `nosec <codes>`                                                                                                                                                                                                                                                                                                              |
+| Semgrep     | `nosemgrep: <rule ids>`                                                                                                                                                                                                                                                                                                      |
+| coverage.py | `pragma: no cover` (as `no-cover`) and `pragma: no branch` (as `no-branch`), in any case and spacing coverage.py accepts                                                                                                                                                                                                     |
 
 It also reads the configuration Ruff and mypy load: `ignore`, `extend-ignore`,
 `per-file-ignores`, `extend-per-file-ignores`, `exclude` and `extend-exclude` under `[tool.ruff]`,
-`[tool.ruff.lint]`, `ruff.toml` and `.ruff.toml`; `disable_error_code`, `ignore_errors`,
+`[tool.ruff.lint]`, `ruff.toml` and `.ruff.toml`, in every such file in the project, not only at
+its root (Ruff applies the closest one to each file), minus `scan_exclude`, and in every file
+their `extend` reaches, each reported at its own path (without a Ruff configuration at the
+project's root, py-qa runs the bundled one with `--config`, and Ruff then reads no other); `disable_error_code`, `ignore_errors`,
 `ignore_missing_imports`, `exclude` and `follow_imports = skip|silent` in `[tool.mypy]`, its
 overrides, `mypy.ini`, `.mypy.ini` and the `[mypy]` sections of `setup.cfg`; and the
 coverage.py settings that take code out of measurement, `omit`, `exclude_lines`,

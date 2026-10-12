@@ -1,4 +1,4 @@
-"""Every route that silences a detector, found in comments and configuration, held to the record.
+"""Every route that silences a detector, in comments, decorators and configuration, held to record.
 
 Comments are read with tokenize, so a directive inside a string or a docstring is not one. Each
 site names the tool it silences and the identifiers it names; a site that names none silences
@@ -7,22 +7,27 @@ everything and can never be recorded.
 
 from __future__ import annotations
 
+import ast
 import configparser
 import fnmatch
 import functools
 import io
+import os
 import re
 import subprocess
 import tokenize
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import tomllib
 
-from py_qa.config import ConfigError, read_pyproject
+from py_qa.config import ConfigError, has_own_ruff_config, read_pyproject
 from py_qa.finding import Finding
 from py_qa.record import STALE, RecordEntry
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 UNRECORDED = "pyqaci.suppression.unrecorded"
 BLANKET = "pyqaci.suppression.blanket"
@@ -71,9 +76,11 @@ _NOQA = re.compile(
 )
 _RUFF_BRACKET = re.compile(r"#\s*ruff\s*:\s*(?:ignore|file-ignore|disable)\[([^\]]*)\]")
 _ISORT = re.compile(r"#\s*isort\s*:\s*(?:skip_file|skip|off)\b")
-_PYLINT = re.compile(
-    r"#\s*pylint\s*:\s*(disable-next|disable-line|disable|skip-file)(?![\w-])(?:\s*=\s*(.*))?"
-)
+# Pylint reads a pragma anywhere in a comment, after a reason as well as at its start; the
+# actions below are the ones that silence a message.
+_PYLINT_WORD = re.compile(r"\bpylint:")
+_PYLINT_DISABLING = frozenset({"disable", "disable-next", "disable-msg"})
+_PYLINT_BLANKET = frozenset({"disable-all", "skip-file"})
 _TYPE_IGNORE = re.compile(r"#\s*type\s*:\s*ignore(?:\[([^\]]*)\])?(?![\w-])")
 _MYPY = re.compile(r"#\s*mypy\s*:\s*(.*)")
 _PYRIGHT_IGNORE = re.compile(r"#\s*pyright\s*:\s*ignore(?:\[([^\]]*)\])?")
@@ -83,10 +90,11 @@ _NOSEC = re.compile(r"#\s*nosec\b(?:\s*:?\s*([A-Z][0-9]+(?:[\s,]+[A-Z][0-9]+)*))
 _COVERAGE = re.compile(r"#\s*pragma[:\s]?\s*no\s*(cover|branch)\b", re.IGNORECASE)
 _NOSEMGREP = re.compile(r"#\s*nosemgrep\b(?:\s*:\s*([\w.\-]+(?:\s*,\s*[\w.\-]+)*))?")
 
-# Every directive above starts with one of these words after its '#'; matched without regard to
-# case, it is a superset of them all.
+# Every directive above starts with one of these words after its '#', and a Pylint pragma holds
+# its word and colon at any point in a comment; matched without regard to case, it is a superset
+# of them all.
 _CANDIDATE = re.compile(
-    r"#\s*(?:ruff|flake8|noqa|isort|pylint|type|mypy|pyright|nosec|nosemgrep|pragma)",
+    r"#\s*(?:ruff|flake8|noqa|isort|type|mypy|pyright|nosec|nosemgrep|pragma)|\bpylint:",
     re.IGNORECASE,
 )
 
@@ -110,9 +118,6 @@ def _directives(segment: str) -> list[tuple[str, tuple[str, ...]]]:
         return [("ruff", _split(match.group(1), r"\s*,\s*"))]
     if _ISORT.match(segment):
         return [("ruff", ("I001",))]
-    if match := _PYLINT.match(segment):
-        codes = _split(match.group(2), r"\s*,\s*") if match.group(1) != "skip-file" else ()
-        return [("pylint", () if "all" in codes else codes)]
     if match := _TYPE_IGNORE.match(segment):
         return [("mypy", _split(match.group(1), r"\s*,\s*"))]
     if match := _MYPY.match(segment):
@@ -128,6 +133,46 @@ def _directives(segment: str) -> list[tuple[str, tuple[str, ...]]]:
     if match := _COVERAGE.match(segment):
         return [("coverage", (f"no-{match.group(1).lower()}",))]
     return []
+
+
+@functools.cache
+def _pylint_pragma() -> tuple[re.Pattern[str], Any, type[Exception]]:
+    # deferred: Pylint is slow to import, and most comments hold no Pylint pragma
+    from pylint.utils.pragma_parser import OPTION_PO, PragmaParserError, parse_pragma
+
+    return OPTION_PO, parse_pragma, PragmaParserError
+
+
+def _pylint_directive(comment: str) -> tuple[str, tuple[str, ...], str] | None:
+    """Return the pragma Pylint reads in a comment, as (tool, codes, text), if it silences.
+
+    Pylint's own expression and parser decide, so a pragma counts exactly where Pylint obeys it.
+    """
+    if not _PYLINT_WORD.search(comment):
+        return None
+    expression, parse, parse_error = _pylint_pragma()
+    match = expression.search(comment)
+    if match is None:
+        return None
+    codes: list[str] = []
+    blanket = False
+    for pragma in _pragmas_read(iter(parse(match.group(2))), parse_error):
+        if pragma.action in _PYLINT_BLANKET:
+            blanket = True
+        elif pragma.action in _PYLINT_DISABLING:
+            blanket = blanket or "all" in pragma.messages
+            codes.extend(pragma.messages)
+    if not blanket and not codes:
+        return None
+    return "pylint", () if blanket else tuple(codes), match.group(1).strip()
+
+
+def _pragmas_read(pragmas: Iterator[Any], parse_error: type[Exception]) -> Iterator[Any]:
+    """Yield the pragmas Pylint applies: it stops at one it cannot parse, keeping those before."""
+    try:
+        yield from pragmas
+    except parse_error:
+        return
 
 
 def _mypy_inline(settings: str) -> list[tuple[str, tuple[str, ...]]]:
@@ -177,20 +222,54 @@ def comment_sites(display: str, source: str) -> list[Site]:
                 Site(display, token.start[0], tool, codes, segment.strip())
                 for tool, codes in _directives(segment)
             )
+        if pylint := _pylint_directive(token.string):
+            found.append(Site(display, token.start[0], *pylint))
     return found
 
 
-def config_sites(root: Path) -> list[Site]:
+_NO_TYPE_CHECK = "no_type_check"
+_TYPING_MODULES = frozenset({"typing", "typing_extensions"})
+
+
+def decorator_sites(display: str, source: str) -> list[Site]:
+    """Return every function typing's no_type_check decorator takes out of mypy's checking.
+
+    The decorator is found in the parsed module, by the names its imports bind, since mypy drops
+    the function's errors before any plugin sees it. Raise SyntaxError if the source is unreadable.
+    """
+    if _NO_TYPE_CHECK not in source:
+        return []
+    try:
+        tree = ast.parse(source)
+    except ValueError as error:  # a null byte, before Python 3.12
+        raise SyntaxError(str(error)) from error
+    modules: set[str] = set()
+    functions: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(a.asname or a.name for a in node.names if a.name in _TYPING_MODULES)
+        elif isinstance(node, ast.ImportFrom) and node.module in _TYPING_MODULES:
+            functions.update(a.asname or a.name for a in node.names if a.name == _NO_TYPE_CHECK)
+    return [
+        Site(display, decorator.lineno, "mypy", (_NO_TYPE_CHECK,), "@" + ast.unparse(decorator))
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        for decorator in node.decorator_list
+        if (isinstance(decorator, ast.Name) and decorator.id in functions)
+        or (
+            isinstance(decorator, ast.Attribute)
+            and decorator.attr == _NO_TYPE_CHECK
+            and isinstance(decorator.value, ast.Name)
+            and decorator.value.id in modules
+        )
+    ]
+
+
+def config_sites(root: Path, scan_exclude: tuple[str, ...] = ()) -> list[Site]:
     """Return every configuration setting that silences Ruff or mypy, in the files they read."""
-    found: list[Site] = []
     tool = read_pyproject(root).get("tool", {})
     text = _text(root / "pyproject.toml")
-    if isinstance(tool.get("ruff"), dict):
-        found.extend(_ruff_sites("pyproject.toml", tool["ruff"], text, "tool.ruff"))
-    for name in ("ruff.toml", ".ruff.toml"):
-        path = root / name
-        if path.is_file():
-            found.extend(_ruff_sites(name, _toml(path), _text(path), ""))
+    found = _ruff_config_sites(root, scan_exclude)
     if isinstance(tool.get("mypy"), dict):
         mypy = tool["mypy"]
         found.extend(_mypy_sites("pyproject.toml", mypy, mypy, text, _header(text, "tool.mypy")))
@@ -212,6 +291,51 @@ def config_sites(root: Path) -> list[Site]:
         path = root / name
         if path.is_file():
             found.extend(_coverage_ini_sites(name, path, prefix))
+    return found
+
+
+# The files Ruff reads its settings from, in any directory: the closest one to a source file
+# applies to it, so one below the root silences findings as surely as the root's own.
+_RUFF_FILES = frozenset({"pyproject.toml", "ruff.toml", ".ruff.toml"})
+
+
+def _ruff_config_sites(root: Path, scan_exclude: tuple[str, ...]) -> list[Site]:
+    """Return the silencing settings of every Ruff configuration in the scope, and its extends.
+
+    Without a configuration of the project's own at its root, py-qa gives Ruff the bundled one
+    with --config, which turns off Ruff's discovery: a file below the root is then never read.
+    """
+    if not has_own_ruff_config(root):
+        return []
+    found: list[Site] = []
+    seen: set[Path] = set()
+    for name in named_files(root, (".",)):
+        if Path(name).name in _RUFF_FILES and not any(
+            fnmatch.fnmatchcase(name, pattern) for pattern in scan_exclude
+        ):
+            found.extend(_ruff_file_sites(root, root / name, seen))
+    return found
+
+
+def _ruff_file_sites(root: Path, path: Path, seen: set[Path]) -> list[Site]:
+    """Return one Ruff configuration's settings, then those of the file its extend names."""
+    resolved = path.resolve()
+    if resolved in seen or not path.is_file():
+        return []
+    seen.add(resolved)
+    data = _toml(path)
+    if path.name == "pyproject.toml":
+        table, prefix = data.get("tool", {}).get("ruff"), "tool.ruff"
+    else:
+        table, prefix = data, ""
+    if not isinstance(table, dict):
+        return []
+    display = Path(os.path.relpath(path, root)).as_posix()
+    found = _ruff_sites(display, table, _text(path), prefix)
+    extend = table.get("extend")
+    if isinstance(extend, str):
+        target = Path(os.path.expandvars(extend)).expanduser()
+        found.extend(_ruff_file_sites(root, path.parent / target, seen))
     return found
 
 
@@ -506,6 +630,35 @@ def scope_files(root: Path, scan_exclude: tuple[str, ...], paths: tuple[str, ...
         for name in project_files(root, scan_exclude)
         if any(within(name, path) for path in paths)
     ]
+
+
+def named_files(root: Path, paths: tuple[str, ...]) -> list[str]:
+    """Return every file of any kind under paths, relative and sorted, as project_files lists.
+
+    That is every file git does not ignore, or without git every file outside environments and
+    build output; a project check reads more than Python.
+    """
+    if in_git_work_tree(root):
+        result = subprocess.run(
+            [
+                *("git", "-C", str(root), "ls-files", "-z"),
+                *("--cached", "--others", "--exclude-standard", "--", *paths),
+            ],
+            capture_output=True,
+            check=True,
+        )
+        listed = {name for name in result.stdout.decode().split("\0") if name}
+    else:
+        listed = set()
+        for path in paths:
+            target = root / path
+            if target.is_file():
+                listed.add(target.relative_to(root).as_posix())
+            for directory, subdirectories, files in os.walk(target):
+                subdirectories[:] = [d for d in subdirectories if d not in SKIPPED_DIRECTORIES]
+                base = Path(directory).relative_to(root)
+                listed.update((base / name).as_posix() for name in files)
+    return sorted(name for name in listed if (root / name).is_file())
 
 
 @functools.cache

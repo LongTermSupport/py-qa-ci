@@ -20,7 +20,7 @@ Pin an exact tag, as a development dependency of the project, so the tools run i
 own environment and see its dependencies:
 
 ```bash
-uv add --dev "py-qa-ci @ git+https://github.com/LongTermSupport/py-qa-ci@v0.4.0"
+uv add --dev "py-qa-ci @ git+https://github.com/LongTermSupport/py-qa-ci@v0.5.0"
 uv run py-qa run
 ```
 
@@ -51,7 +51,8 @@ one invocation reports every static finding; if any of them fails, the runners d
 
 Options: `-t <lane>` (repeatable; overrides the switches), `--skip <lane>` (repeatable; every
 lane but these), `-p <path>` (repeatable; one file is enough; limits the format and detector
-lanes to those paths and does not run the runners), `--diff` and `--base <ref>` (a diff run,
+lanes to those paths, runs each project check on the named files it checks, and does not run the
+runners), `--diff` and `--base <ref>` (a diff run,
 below), `--json <file>` (also write the outcome of every lane, and a diff run's test selection,
 as JSON), `--no-lock`, `--no-fix`, `--ci`, `--fail-fast`. Every identifier a tool prints reaches
 the output unaltered. The run ends with a table of every lane, its result and the seconds it
@@ -68,8 +69,10 @@ Other commands, none of which runs a defence:
   the project record and any scan exclusions
 - `py-qa rule-doc <identifier>`: documentation for any identifier a finding prints, offline
 - `py-qa rule <identifier> <path>...`: the harness, which runs one rule alone on the paths
-  given (Pylint messages, Ruff codes, and the suppression rules); exit 0 it did not fire, 1 it
-  fired, 2 it could not run
+  given (Pylint messages, Ruff codes, the suppression rules and project checks, as `-p` runs
+  them), whether or not `scan_exclude`
+  covers them; exit 0 it did not fire, 1 it fired, 2 it could not run, as when no Python file is
+  under the paths
 - `py-qa docs-check`: fail if a listed defence has no complete page
 - `py-qa record check|list`: validate, or list, the project record
 - `py-qa summary [--check]`: write, or check, the agent summary region
@@ -91,9 +94,17 @@ doc = "scripts/check_spelling.py"                    # what py-qa rule-doc spell
 phase = "detectors"                                  # or "runners", after the test lane
 paths = ["**/*.md"]                                  # a diff run runs it only when one changed
 diff_command = ["{python}", "scripts/check_spelling.py", "{files}"]  # and like this, if given
+paths_command = ["{python}", "scripts/check_spelling.py", "{files}"] # on named paths; see below
 diff = true                                          # false: the full run only
 verdict = { file = "out/spelling.json", key = "summary.passed" }    # see below
 ```
+
+Under `-p`, and in `py-qa rule <name> <path>...`, a check runs on the files under the paths
+given that its `paths` match, with `{files}` as their list: through `paths_command`, or else a
+`diff_command` that holds `{files}` and no base placeholder. When no named file is one it
+checks, the run says so and skips it; a check with neither command says it takes no file list
+and is not run, rather than running whole over files nobody named (`py-qa rule` exits 2 for
+both).
 
 `name`, `command`, `description` and `doc` are required. `py-qa rule-doc <name>` prints the
 check's description, how it runs, and what documents it: a Markdown file whole, a Python file's
@@ -254,8 +265,10 @@ review_by = 2026-04-15                  # within max_review_days of decided_on
 The suppression itself stays where the tool reads it (`noqa: S602` on the line, an entry in
 `per-file-ignores`, `type: ignore[arg-type]`); the record is what makes it legitimate. The
 `suppression` lane finds every suppression comment for Ruff, Pylint, mypy, Pyright, Bandit,
-Semgrep and coverage.py (`pragma: no cover`), read with `tokenize` so strings never count; every
-setting in the Ruff and mypy configuration that silences a finding or excludes a file; a mypy
+Semgrep and coverage.py (`pragma: no cover`), read with `tokenize` so strings never count; a
+function decorated with `typing.no_type_check`, which mypy does not check (`mypy::no_type_check`); every
+setting in the Ruff and mypy configuration that silences a finding or excludes a file, Ruff's in
+every configuration file in the project and every file an `extend` reaches; a mypy
 strictness flag turned off where `strict` or the global section had it on
 (`disallow_untyped_defs = false` in an override); and the coverage.py settings that take code
 out of measurement (`omit`, `exclude_lines`, `exclude_also`, `partial_branches`). Each must match an exception by

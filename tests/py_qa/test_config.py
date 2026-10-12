@@ -151,6 +151,7 @@ description = "Prose is written in British English."
 doc = "scripts/spelling.py"
 paths = ["**/*.md"]
 diff_command = ["{python}", "scripts/spelling.py", "{files}"]
+paths_command = ["{python}", "scripts/spelling.py", "--only", "{files}"]
 
 [[tool.py-qa.check]]
 name = "smoke"
@@ -171,6 +172,8 @@ verdict = { file = "out/smoke.json", key = "summary.passed" }
     assert smoke.phase == "runners"
     assert smoke.paths is None
     assert smoke.diff_command is None
+    assert spelling.paths_command == ("{python}", "scripts/spelling.py", "--only", "{files}")
+    assert smoke.paths_command is None
     assert spelling.in_diff
     assert not smoke.in_diff
     assert spelling.verdict is None
@@ -198,6 +201,11 @@ CHECK = 'name = "x"\ncommand = ["x"]\ndescription = "X holds."\ndoc = "x.md"\n'
         ("[[tool.py-qa.check]]\n" + CHECK.replace('"x"\ncommand', '"ruff"\ncommand'), "lane"),
         ("[[tool.py-qa.check]]\n" + CHECK + "[[tool.py-qa.check]]\n" + CHECK, "twice"),
         ("[[tool.py-qa.check]]\n" + CHECK + 'diff_command = ["x", "{nope}"]\n', "{nope}"),
+        ("[[tool.py-qa.check]]\n" + CHECK + 'paths_command = ["x"]\n', "{files}"),
+        (
+            "[[tool.py-qa.check]]\n" + CHECK + 'paths_command = ["x", "{files}", "{base}"]\n',
+            "{base}",
+        ),
     ],
 )
 def test_rejects_bad_project_checks(tmp_path: Path, text: str, fragment: str) -> None:
