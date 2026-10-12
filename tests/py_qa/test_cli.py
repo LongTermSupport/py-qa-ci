@@ -122,6 +122,34 @@ def test_rule_harness_ruff_and_builtin(root: Path, capsys: pytest.CaptureFixture
     assert main(["rule", "pyqaci.suppression.unscanned", "src/a.py"]) == 0
 
 
+def test_rule_harness_reaches_a_fixture_under_scan_exclude(
+    root: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    (root / "pyproject.toml").write_text(
+        '[tool.py-qa]\nscan_exclude = ["tests/fixtures/*"]\n', encoding="utf-8"
+    )
+    fixtures = root / "tests" / "fixtures"
+    fixtures.mkdir(parents=True)
+    (fixtures / "leaky.py").write_text(LEAKY, encoding="utf-8")
+    (fixtures / "ign.py").write_text(
+        "def d() -> int:\n    return 'x'  # type: " + "ignore[return-value]\n", encoding="utf-8"
+    )
+    assert main(["rule", "pyqaci-sensitive-repr", "tests/fixtures/leaky.py"]) == 1
+    assert "pyqaci-sensitive-repr" in capfd.readouterr().out
+    assert main(["rule", "pyqaci.suppression.unrecorded", "tests/fixtures/ign.py"]) == 1
+    assert "tests/fixtures/ign.py:2: pyqaci.suppression.unrecorded" in capfd.readouterr().out
+    # The sweep still leaves the fixtures out.
+    assert main(["run", "-t", "suppression"]) == 0
+
+
+def test_rule_harness_refuses_a_path_with_no_python_file(
+    root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["rule", "pyqaci.suppression.unrecorded", "src/missing.py"]) == 2
+    assert "no Python file under src/missing.py" in capsys.readouterr().err
+    assert main(["rule", "pyqaci-sensitive-repr", "src/missing.py"]) == 2
+
+
 def test_rule_harness_refuses_what_it_cannot_run_alone(
     root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

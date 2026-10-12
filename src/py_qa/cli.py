@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,6 +23,7 @@ from py_qa.lock import LockHeldError, lock_path, run_lock
 from py_qa.pipeline import METHOD_LINE, UsageError, all_lanes, run_pipeline, suppression_findings
 from py_qa.record import RecordEntry, check_record, load_record
 from py_qa.summary import check_summary, write_summary
+from py_qa.suppression import scope_files
 from py_qa.tools import lane_tool, pylint_commands, pylint_messages, ruff_check_command
 
 if TYPE_CHECKING:
@@ -262,8 +263,17 @@ def _rule_doc(config: Config, identifier: str) -> int:
 
 
 def _rule(config: Config, identifier: str, paths: tuple[str, ...]) -> int:
-    """Run one rule alone on paths: exit 0 it did not fire, 1 it fired, 2 it could not run."""
+    """Run one rule alone on paths: exit 0 it did not fire, 1 it fired, 2 it could not run.
+
+    scan_exclude governs the sweep, not a request: the paths named are read whether or not it
+    covers them, since that is where a rule's fixtures live. A path that holds no Python file is
+    refused, so a red proof cannot pass for green by reaching nothing.
+    """
+    config = replace(config, scan_exclude=())
     if identifier in _HARNESS_BUILTINS:
+        if not scope_files(config.root, (), paths):
+            msg = f"no Python file under {', '.join(paths)}"
+            raise UsageError(msg)
         entries, _ = _entries(config)
         findings = suppression_findings(config, entries, paths)
         return _report([finding for finding in findings if finding.rule == identifier])

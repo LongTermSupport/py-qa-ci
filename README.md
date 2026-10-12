@@ -68,8 +68,9 @@ Other commands, none of which runs a defence:
   the project record and any scan exclusions
 - `py-qa rule-doc <identifier>`: documentation for any identifier a finding prints, offline
 - `py-qa rule <identifier> <path>...`: the harness, which runs one rule alone on the paths
-  given (Pylint messages, Ruff codes, and the suppression rules); exit 0 it did not fire, 1 it
-  fired, 2 it could not run
+  given (Pylint messages, Ruff codes, and the suppression rules), whether or not `scan_exclude`
+  covers them; exit 0 it did not fire, 1 it fired, 2 it could not run, as when no Python file is
+  under the paths
 - `py-qa docs-check`: fail if a listed defence has no complete page
 - `py-qa record check|list`: validate, or list, the project record
 - `py-qa summary [--check]`: write, or check, the agent summary region
