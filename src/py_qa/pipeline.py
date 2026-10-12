@@ -31,6 +31,7 @@ from py_qa.suppression import (
     check_suppressions,
     comment_sites,
     config_sites,
+    decorator_sites,
     project_files,
     scope_files,
     within,
@@ -209,7 +210,8 @@ def suppression_findings(
 
 def _file_sites(root: Path, name: str) -> list[Site] | Finding:
     try:
-        return comment_sites(name, (root / name).read_text(encoding="utf-8"))
+        source = (root / name).read_text(encoding="utf-8")
+        return comment_sites(name, source) + decorator_sites(name, source)
     except (SyntaxError, UnicodeDecodeError) as error:
         return Finding(name, 0, UNSCANNED, f"cannot be scanned: {error}")
 

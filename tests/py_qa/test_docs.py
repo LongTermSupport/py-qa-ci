@@ -105,6 +105,7 @@ def test_check_docs_reports_project_rules_without_a_page(root: Path) -> None:
         ("bandit::B404", ("# bandit::B404", "Bandit", "not installed with py-qa")),
         ("coverage::no-cover", ("# coverage::no-cover", "coverage.py", "pragma: no cover")),
         ("ruff::exclude", ("# ruff::exclude", "files Ruff does not check")),
+        ("mypy::no_type_check", ("# mypy::no_type_check", "@typing.no_type_check", "decorator")),
         ("semgrep::python.lang.rule", ("# semgrep::python.lang.rule", "Semgrep")),
     ],
 )

@@ -232,6 +232,9 @@ _ROUTES = {
     "modules mypy does not analyse, or analyses without reporting their errors.",
     "mypy::ignore_errors": "A mypy `ignore_errors = true` setting: every error in the modules "
     "it names is dropped.",
+    "mypy::no_type_check": "The `@typing.no_type_check` decorator (or `@no_type_check`, from "
+    "`typing` or `typing_extensions`, under any name it is imported as): mypy does not check "
+    "the function it decorates, so every error in it is dropped.",
     "coverage::no-cover": "A coverage.py `pragma: no cover` comment: the line, or the block it "
     "opens, is left out of measurement.",
     "coverage::no-branch": "A coverage.py `pragma: no branch` comment: a branch not taken there "

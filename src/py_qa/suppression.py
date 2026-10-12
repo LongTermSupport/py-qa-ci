@@ -1,4 +1,4 @@
-"""Every route that silences a detector, found in comments and configuration, held to the record.
+"""Every route that silences a detector, in comments, decorators and configuration, held to record.
 
 Comments are read with tokenize, so a directive inside a string or a docstring is not one. Each
 site names the tool it silences and the identifiers it names; a site that names none silences
@@ -7,6 +7,7 @@ everything and can never be recorded.
 
 from __future__ import annotations
 
+import ast
 import configparser
 import fnmatch
 import functools
@@ -223,6 +224,44 @@ def comment_sites(display: str, source: str) -> list[Site]:
         if pylint := _pylint_directive(token.string):
             found.append(Site(display, token.start[0], *pylint))
     return found
+
+
+_NO_TYPE_CHECK = "no_type_check"
+_TYPING_MODULES = frozenset({"typing", "typing_extensions"})
+
+
+def decorator_sites(display: str, source: str) -> list[Site]:
+    """Return every function typing's no_type_check decorator takes out of mypy's checking.
+
+    The decorator is found in the parsed module, by the names its imports bind, since mypy drops
+    the function's errors before any plugin sees it. Raise SyntaxError if the source is unreadable.
+    """
+    if _NO_TYPE_CHECK not in source:
+        return []
+    try:
+        tree = ast.parse(source)
+    except ValueError as error:  # a null byte, before Python 3.12
+        raise SyntaxError(str(error)) from error
+    modules: set[str] = set()
+    functions: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(a.asname or a.name for a in node.names if a.name in _TYPING_MODULES)
+        elif isinstance(node, ast.ImportFrom) and node.module in _TYPING_MODULES:
+            functions.update(a.asname or a.name for a in node.names if a.name == _NO_TYPE_CHECK)
+    return [
+        Site(display, decorator.lineno, "mypy", (_NO_TYPE_CHECK,), "@" + ast.unparse(decorator))
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        for decorator in node.decorator_list
+        if (isinstance(decorator, ast.Name) and decorator.id in functions)
+        or (
+            isinstance(decorator, ast.Attribute)
+            and decorator.attr == _NO_TYPE_CHECK
+            and isinstance(decorator.value, ast.Name)
+            and decorator.value.id in modules
+        )
+    ]
 
 
 def config_sites(root: Path) -> list[Site]:

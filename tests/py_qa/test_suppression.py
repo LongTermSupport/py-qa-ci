@@ -17,6 +17,7 @@ from py_qa.suppression import (
     check_suppressions,
     comment_sites,
     config_sites,
+    decorator_sites,
     project_files,
 )
 
@@ -114,6 +115,37 @@ def test_unparseable_source_raises() -> None:
 def test_source_with_no_directive_word_is_not_tokenized() -> None:
     # Unparseable, but nothing in it could be a directive, so there is nothing to scan for.
     assert comment_sites("a.py", 'x = """\n') == []
+
+
+NO_TYPE_CHECK = "no_type_check"
+
+
+@pytest.mark.parametrize(
+    ("text", "lines"),
+    [
+        ("import typing\n\n\n@typing.NTC\ndef d(text: str) -> int:\n    return text\n", [4]),
+        ("from typing import NTC\n\n\n@NTC\ndef d(): ...\n", [4]),
+        ("from typing_extensions import NTC\n\n\nclass C:\n    @NTC\n    def d(self): ...\n", [5]),
+        ("import typing_extensions as te\n\n\n@te.NTC\nasync def d(): ...\n", [4]),
+        ("from typing import NTC as unchecked\n\n\n@staticmethod\n@unchecked\ndef d(): ...\n", [5]),
+        ("import typing as t\n\n\n@t.NTC\ndef d(): ...\n", [4]),
+        # Not typing's decorator, so mypy checks the function.
+        ("from mylib import NTC\n\n\n@NTC\ndef d(): ...\n", []),
+        ("import mylib\n\n\n@mylib.NTC\ndef d(): ...\n", []),
+        ('x = "@typing.NTC"\n', []),
+    ],
+)
+def test_no_type_check_decorator_is_a_route(text: str, lines: list[int]) -> None:
+    found = decorator_sites("a.py", text.replace("NTC", NO_TYPE_CHECK))
+    assert [(site.line, site.rule_ids) for site in found] == [
+        (line, (f"mypy::{NO_TYPE_CHECK}",)) for line in lines
+    ]
+
+
+def test_decorator_scan_reads_only_source_that_names_the_decorator() -> None:
+    assert decorator_sites("a.py", "def broken(:\n") == []
+    with pytest.raises(SyntaxError):
+        decorator_sites("a.py", f"import typing\n@typing.{NO_TYPE_CHECK}\ndef broken(:\n")
 
 
 def write(root: Path, name: str, text: str) -> None:

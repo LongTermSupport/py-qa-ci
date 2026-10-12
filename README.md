@@ -254,7 +254,8 @@ review_by = 2026-04-15                  # within max_review_days of decided_on
 The suppression itself stays where the tool reads it (`noqa: S602` on the line, an entry in
 `per-file-ignores`, `type: ignore[arg-type]`); the record is what makes it legitimate. The
 `suppression` lane finds every suppression comment for Ruff, Pylint, mypy, Pyright, Bandit,
-Semgrep and coverage.py (`pragma: no cover`), read with `tokenize` so strings never count; every
+Semgrep and coverage.py (`pragma: no cover`), read with `tokenize` so strings never count; a
+function decorated with `typing.no_type_check`, which mypy does not check (`mypy::no_type_check`); every
 setting in the Ruff and mypy configuration that silences a finding or excludes a file; a mypy
 strictness flag turned off where `strict` or the global section had it on
 (`disallow_untyped_defs = false` in an override); and the coverage.py settings that take code
