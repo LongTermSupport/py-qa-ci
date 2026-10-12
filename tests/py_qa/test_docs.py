@@ -1,13 +1,23 @@
 """Tests for resolving identifiers to documentation offline, and for the dangling-docs check."""
 
+import re
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from py_qa.config import load_config
 from py_qa.defences import Defence
-from py_qa.docs import BUNDLED_DOCS, REQUIRED_SECTIONS, check_docs, missing_sections, resolve
+from py_qa.docs import (
+    BUNDLED_DOCS,
+    REQUIRED_SECTIONS,
+    TOOL_DIAGNOSTICS,
+    check_docs,
+    missing_sections,
+    resolve,
+)
 from py_qa.pylint_plugin import BUNDLED_MESSAGES
+from py_qa.tools import ruff_check_command
 
 
 @pytest.fixture
@@ -83,6 +93,31 @@ def test_native_catalogues(root: Path) -> None:
     assert "Check argument types in calls" in mypy
 
 
+def test_every_code_ruff_prints_for_an_unreadable_file_resolves(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    sources = {
+        "broken.py": b"def broken(:\n",
+        "rejected.py": b"nonlocal x\n",
+        "duplicate.py": b"def f(a, a):\n    return a\n",
+        "binary.py": b"\xff\xfe\n",
+    }
+    (root / "src").mkdir()
+    for name, data in sources.items():
+        (root / "src" / name).write_bytes(data)
+    config = load_config(root)
+    command = ruff_check_command(config, [f"src/{name}" for name in sources])
+    result = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
+    codes = set(re.findall(r"^src/\S+?:\d+:\d+: ([\w-]+)", result.stdout, re.MULTILINE))
+    assert {"invalid-syntax", "E902"} <= codes
+    for code in codes:
+        assert resolve(code, config) is not None, code
+    page = resolve("invalid-syntax", config)
+    assert page is not None
+    assert missing_sections(page) == []
+
+
 def test_unknown_identifier(root: Path) -> None:
     assert resolve("no-such-thing", load_config(root)) is None
 
@@ -90,7 +125,7 @@ def test_unknown_identifier(root: Path) -> None:
 def test_every_bundled_identifier_has_a_complete_page() -> None:
     from py_qa.defences import BUILTIN
 
-    for identifier in (*BUILTIN, *BUNDLED_MESSAGES):
+    for identifier in (*BUILTIN, *BUNDLED_MESSAGES, *TOOL_DIAGNOSTICS):
         page = BUNDLED_DOCS / f"{identifier}.md"
         assert page.is_file(), identifier
         assert missing_sections(page.read_text(encoding="utf-8")) == [], identifier
@@ -99,7 +134,7 @@ def test_every_bundled_identifier_has_a_complete_page() -> None:
 def test_every_bundled_page_belongs_to_an_identifier() -> None:
     from py_qa.defences import BUILTIN
 
-    known = {*BUILTIN, *BUNDLED_MESSAGES}
+    known = {*BUILTIN, *BUNDLED_MESSAGES, *TOOL_DIAGNOSTICS}
     assert {page.stem for page in BUNDLED_DOCS.glob("*.md")} == known
 
 

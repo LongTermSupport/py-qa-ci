@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
 BUNDLED_DOCS = Path(__file__).parent / "docs" / "rules"
 DANGLING = "pyqaci.docs.dangling"
+# Codes a tool prints that are not in its rule catalogue, each with a page bundled beside py-qa's.
+TOOL_DIAGNOSTICS = ("invalid-syntax",)
 REQUIRED_SECTIONS = ("## What it flags", "## Why", "## How to fix correctly")
 _PREFIX = re.compile(r"^(?:ruff|pylint|mypy|pyright|bandit|semgrep|coverage)::")
 
