@@ -219,6 +219,56 @@ def test_ruff_toml_and_mypy_ini_routes(tmp_path: Path) -> None:
     }
 
 
+def test_a_nested_ruff_configuration_is_read(tmp_path: Path) -> None:
+    write(tmp_path, "pyproject.toml", '[tool.ruff.lint]\nselect = ["T20"]\n')
+    write(tmp_path, "src/probe/sub/ruff.toml", '[lint]\nselect = ["T20"]\nignore = ["T201"]\n')
+    write(tmp_path, "src/probe/other/pyproject.toml", '[tool.ruff]\nextend-exclude = ["gen"]\n')
+    write(tmp_path, "src/probe/plain/pyproject.toml", '[project]\nname = "plain"\n')
+    write(tmp_path, ".venv/lib/ruff.toml", '[lint]\nignore = ["E501"]\n')
+    write(tmp_path, "tests/fixtures/ruff.toml", '[lint]\nignore = ["E501"]\n')
+    found = {
+        (site.path, site.line, site.codes)
+        for site in config_sites(tmp_path, scan_exclude=("tests/fixtures/*",))
+    }
+    assert found == {
+        ("src/probe/sub/ruff.toml", 3, ("T201",)),
+        ("src/probe/other/pyproject.toml", 2, ("exclude",)),
+    }
+
+
+def test_a_nested_ruff_configuration_is_inert_under_the_bundled_one(tmp_path: Path) -> None:
+    # py-qa passes the bundled configuration with --config, which turns off Ruff's discovery.
+    write(tmp_path, "pyproject.toml", '[project]\nname = "probe"\n')
+    write(tmp_path, "src/probe/sub/ruff.toml", '[lint]\nignore = ["T201"]\n')
+    assert config_sites(tmp_path) == []
+
+
+def test_a_ruff_configuration_reached_by_extend_is_read(tmp_path: Path) -> None:
+    write(tmp_path, "pyproject.toml", '[tool.ruff]\nextend = "qa/ruff-base.toml"\n')
+    write(
+        tmp_path,
+        "qa/ruff-base.toml",
+        'extend = "../shared/.ruff.toml"\n[lint]\nignore = ["T201"]\n',
+    )
+    write(
+        tmp_path,
+        "shared/.ruff.toml",
+        'extend = "../qa/ruff-base.toml"\n[lint]\nignore = ["E501"]\n',
+    )
+    found = sorted((site.path, site.codes) for site in config_sites(tmp_path))
+    # shared/.ruff.toml is found once, though it is both in the scope and reached by extend.
+    assert found == [("qa/ruff-base.toml", ("T201",)), ("shared/.ruff.toml", ("E501",))]
+
+
+def test_an_extend_outside_the_project_is_read_and_named_from_the_project(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write(project, "ruff.toml", 'extend = "../base.toml"\n')
+    write(tmp_path, "base.toml", '[lint]\nignore = ["T201"]\n')
+    assert [(site.path, site.codes) for site in config_sites(project)] == [
+        ("../base.toml", ("T201",))
+    ]
+
+
 def test_settings_that_do_not_silence_are_not_routes(tmp_path: Path) -> None:
     write(
         tmp_path,

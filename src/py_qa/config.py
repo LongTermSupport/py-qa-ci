@@ -227,6 +227,12 @@ def read_pyproject(root: Path) -> dict[str, Any]:
         raise ConfigError(msg) from error
 
 
+def has_own_ruff_config(root: Path) -> bool:
+    """Return True when the project configures Ruff itself, at its root, so py-qa's is not used."""
+    own = (root / "ruff.toml").is_file() or (root / ".ruff.toml").is_file()
+    return own or "ruff" in read_pyproject(root).get("tool", {})
+
+
 def load_config(root: Path) -> Config:
     """Read [tool.py-qa] from root's pyproject.toml, rejecting unknown keys and bad types."""
     tool = read_pyproject(root).get("tool", {})

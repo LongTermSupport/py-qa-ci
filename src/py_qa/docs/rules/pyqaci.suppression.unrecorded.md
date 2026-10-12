@@ -22,7 +22,10 @@ docstrings is never mistaken for a directive. It recognises:
 
 It also reads the configuration Ruff and mypy load: `ignore`, `extend-ignore`,
 `per-file-ignores`, `extend-per-file-ignores`, `exclude` and `extend-exclude` under `[tool.ruff]`,
-`[tool.ruff.lint]`, `ruff.toml` and `.ruff.toml`; `disable_error_code`, `ignore_errors`,
+`[tool.ruff.lint]`, `ruff.toml` and `.ruff.toml`, in every such file in the project, not only at
+its root (Ruff applies the closest one to each file), minus `scan_exclude`, and in every file
+their `extend` reaches, each reported at its own path (without a Ruff configuration at the
+project's root, py-qa runs the bundled one with `--config`, and Ruff then reads no other); `disable_error_code`, `ignore_errors`,
 `ignore_missing_imports`, `exclude` and `follow_imports = skip|silent` in `[tool.mypy]`, its
 overrides, `mypy.ini`, `.mypy.ini` and the `[mypy]` sections of `setup.cfg`; and the
 coverage.py settings that take code out of measurement, `omit`, `exclude_lines`,

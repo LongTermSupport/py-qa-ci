@@ -197,7 +197,7 @@ def suppression_findings(
     if paths is not None:
         files = scope_files(root, config.scan_exclude, paths)
     findings: list[Finding] = []
-    sites: list[Site] = [] if paths is not None else config_sites(root)
+    sites: list[Site] = [] if paths is not None else config_sites(root, config.scan_exclude)
     for name in files:
         found = _file_sites(root, name)
         if isinstance(found, Finding):

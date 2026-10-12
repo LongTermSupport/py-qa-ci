@@ -12,6 +12,7 @@ import configparser
 import fnmatch
 import functools
 import io
+import os
 import re
 import subprocess
 import tokenize
@@ -21,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 import tomllib
 
-from py_qa.config import ConfigError, read_pyproject
+from py_qa.config import ConfigError, has_own_ruff_config, read_pyproject
 from py_qa.finding import Finding
 from py_qa.record import STALE, RecordEntry
 
@@ -264,17 +265,11 @@ def decorator_sites(display: str, source: str) -> list[Site]:
     ]
 
 
-def config_sites(root: Path) -> list[Site]:
+def config_sites(root: Path, scan_exclude: tuple[str, ...] = ()) -> list[Site]:
     """Return every configuration setting that silences Ruff or mypy, in the files they read."""
-    found: list[Site] = []
     tool = read_pyproject(root).get("tool", {})
     text = _text(root / "pyproject.toml")
-    if isinstance(tool.get("ruff"), dict):
-        found.extend(_ruff_sites("pyproject.toml", tool["ruff"], text, "tool.ruff"))
-    for name in ("ruff.toml", ".ruff.toml"):
-        path = root / name
-        if path.is_file():
-            found.extend(_ruff_sites(name, _toml(path), _text(path), ""))
+    found = _ruff_config_sites(root, scan_exclude)
     if isinstance(tool.get("mypy"), dict):
         mypy = tool["mypy"]
         found.extend(_mypy_sites("pyproject.toml", mypy, mypy, text, _header(text, "tool.mypy")))
@@ -296,6 +291,51 @@ def config_sites(root: Path) -> list[Site]:
         path = root / name
         if path.is_file():
             found.extend(_coverage_ini_sites(name, path, prefix))
+    return found
+
+
+# The files Ruff reads its settings from, in any directory: the closest one to a source file
+# applies to it, so one below the root silences findings as surely as the root's own.
+_RUFF_FILES = frozenset({"pyproject.toml", "ruff.toml", ".ruff.toml"})
+
+
+def _ruff_config_sites(root: Path, scan_exclude: tuple[str, ...]) -> list[Site]:
+    """Return the silencing settings of every Ruff configuration in the scope, and its extends.
+
+    Without a configuration of the project's own at its root, py-qa gives Ruff the bundled one
+    with --config, which turns off Ruff's discovery: a file below the root is then never read.
+    """
+    if not has_own_ruff_config(root):
+        return []
+    found: list[Site] = []
+    seen: set[Path] = set()
+    for name in named_files(root, (".",)):
+        if Path(name).name in _RUFF_FILES and not any(
+            fnmatch.fnmatchcase(name, pattern) for pattern in scan_exclude
+        ):
+            found.extend(_ruff_file_sites(root, root / name, seen))
+    return found
+
+
+def _ruff_file_sites(root: Path, path: Path, seen: set[Path]) -> list[Site]:
+    """Return one Ruff configuration's settings, then those of the file its extend names."""
+    resolved = path.resolve()
+    if resolved in seen or not path.is_file():
+        return []
+    seen.add(resolved)
+    data = _toml(path)
+    if path.name == "pyproject.toml":
+        table, prefix = data.get("tool", {}).get("ruff"), "tool.ruff"
+    else:
+        table, prefix = data, ""
+    if not isinstance(table, dict):
+        return []
+    display = Path(os.path.relpath(path, root)).as_posix()
+    found = _ruff_sites(display, table, _text(path), prefix)
+    extend = table.get("extend")
+    if isinstance(extend, str):
+        target = Path(os.path.expandvars(extend)).expanduser()
+        found.extend(_ruff_file_sites(root, path.parent / target, seen))
     return found
 
 
@@ -612,12 +652,12 @@ def named_files(root: Path, paths: tuple[str, ...]) -> list[str]:
         listed = set()
         for path in paths:
             target = root / path
-            found = [target] if target.is_file() else target.rglob("*") if target.is_dir() else []
-            listed.update(
-                name
-                for name in (item.relative_to(root).as_posix() for item in found)
-                if not SKIPPED_DIRECTORIES.intersection(Path(name).parts)
-            )
+            if target.is_file():
+                listed.add(target.relative_to(root).as_posix())
+            for directory, subdirectories, files in os.walk(target):
+                subdirectories[:] = [d for d in subdirectories if d not in SKIPPED_DIRECTORIES]
+                base = Path(directory).relative_to(root)
+                listed.update((base / name).as_posix() for name in files)
     return sorted(name for name in listed if (root / name).is_file())
 
 

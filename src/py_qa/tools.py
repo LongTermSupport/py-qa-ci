@@ -16,7 +16,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from py_qa.config import PATH_LANES, read_pyproject
+from py_qa.config import PATH_LANES, has_own_ruff_config, read_pyproject
 from py_qa.suppression import scope_files, within
 
 if TYPE_CHECKING:
@@ -42,8 +42,7 @@ class PylintMessage:
 
 def ruff_config_args(root: Path) -> list[str]:
     """Return --config for the bundled Ruff configuration, unless the project has its own."""
-    own = (root / "ruff.toml").is_file() or (root / ".ruff.toml").is_file()
-    if own or "ruff" in read_pyproject(root).get("tool", {}):
+    if has_own_ruff_config(root):
         return []
     return ["--config", str(DEFAULTS / "ruff.toml")]
 
