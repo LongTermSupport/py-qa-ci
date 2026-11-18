@@ -3,9 +3,23 @@
 # consuming project. CI is set, so the formatter checks rather than fixes.
 name: CI
 
+# A push that changes only documentation starts no run; pull requests are never filtered.
+# CHANGELOG.md stays in (tests/py_qa/test_release.py holds its latest heading to the version), and
+# so does src/ whole (the bundled defence pages). README.md, which that test also reads, is left
+# out: a README-only change is tested on its pull request.
 on:
   push:
     branches: [main]
+    paths:
+      - "**"
+      - "!**.md"
+      - "!docs/**"
+      - "CHANGELOG.md"
+      - "src/**"
+      - "**/CLAUDE.md"
+      - "**/AGENTS.md"
+      - ".claude/**"
+      - ".github/**"
   pull_request:
   workflow_dispatch:
 
@@ -35,3 +49,17 @@ jobs:
           uv sync --locked --python "$(command -v python)"
       - name: py-qa run
         run: uv run py-qa run
+
+  # The workflow lint (LongTermSupport/actions-qa-ci), on pull requests.
+  actions-qa-ci:
+    name: actions-qa-ci
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: LongTermSupport/actions-qa-ci@2784a484769348f14ed780db9b45cd3a402bf31e # v0.1.0
